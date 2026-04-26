@@ -1,0 +1,240 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "schema_version": "1.0.0",
+  "title": "Game Design Document",
+  "description": "Structured GDD consumed by the orchestrator. Chat edits and plugin outputs must conform to this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version of THIS schema (not the document). Used for migrations."
+    },
+    "game_title": {
+      "type": "string",
+      "description": "Working title of the game."
+    },
+    "genres": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "One or more genre labels. Free-form (hybrids allowed), e.g. 'Action-RPG'."
+    },
+    "core_loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the player does moment-to-moment: the primary gameplay loop.",
+      "properties": {
+        "goal": {
+          "type": "string",
+          "description": "What the player is trying to achieve in a single loop iteration."
+        },
+        "actions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Verbs available to the player during the loop."
+        },
+        "rewards": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "What the player receives upon success."
+        },
+        "progression": {
+          "type": "string",
+          "description": "How the loop compounds into long-term progression."
+        }
+      },
+      "required": ["goal", "actions", "rewards"]
+    },
+    "mechanics": {
+      "type": "array",
+      "description": "Individual gameplay systems or mechanics.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^mech_[a-z0-9_]+$" },
+          "description": { "type": "string" },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^mech_[a-z0-9_]+$" },
+            "description": "Other mechanics this one depends on. App-level validator checks existence."
+          }
+        },
+        "required": ["id", "description"]
+      }
+    },
+    "assets": {
+      "type": "array",
+      "description": "Generated or imported game assets.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^asset_[a-z0-9_]+$" },
+          "type": { "enum": ["3D", "Audio", "Dialogue", "Code", "Image", "Texture"] },
+          "path": { "type": "string", "description": "Relative path within project or URI." },
+          "status": { "enum": ["draft", "approved", "rejected", "archived"] },
+          "generated_by": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "plugin_name": { "type": "string" },
+              "prompt": { "type": "string" },
+              "prompt_hash": { "type": "string" },
+              "params": { "type": "object" },
+              "cost": { "type": "number" }
+            }
+          },
+          "version": { "type": "integer", "minimum": 1 },
+          "parent_asset_id": { "type": ["string", "null"], "pattern": "^asset_[a-z0-9_]+$" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "created_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "type", "path", "status", "created_at"]
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "description": "Development tasks shown in the Task Dashboard.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^task_[a-z0-9_]+$" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "status": { "enum": ["Ready", "InProgress", "Blocked", "NeedsReview", "Done", "Cancelled"] },
+          "priority": { "enum": ["low", "medium", "high", "critical"] },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^task_[a-z0-9_]+$" }
+          },
+          "related_asset_ids": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^asset_[a-z0-9_]+$" }
+          },
+          "related_mechanic_ids": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^mech_[a-z0-9_]+$" }
+          },
+          "assigned_to": { "type": "string" },
+          "blocked_by": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^task_[a-z0-9_]+$" }
+          },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "due_date": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "title", "status", "created_at"]
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "description": "Game scenes / levels. Referenced by Scene Tester.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^scene_[a-z0-9_]+$" },
+          "name": { "type": "string" },
+          "related_asset_ids": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^asset_[a-z0-9_]+$" }
+          },
+          "entry_points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string" },
+                "from_scene_id": { "type": "string", "pattern": "^scene_[a-z0-9_]+$" },
+                "position": {
+                  "type": "array",
+                  "items": { "type": "number" },
+                  "minItems": 2,
+                  "maxItems": 3
+                }
+              },
+              "required": ["id"]
+            }
+          }
+        },
+        "required": ["id", "name"]
+      }
+    },
+    "characters": {
+      "type": "array",
+      "description": "Named characters — player, NPCs, enemies.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^char_[a-z0-9_]+$" },
+          "name": { "type": "string" },
+          "role": { "type": "string", "description": "Free-form: protagonist, merchant, boss, etc." },
+          "stats": {
+            "type": "object",
+            "description": "Genre-specific stat block. Loose by design; consider a $ref to a genre schema in future."
+          },
+          "asset_id": { "type": "string", "pattern": "^asset_[a-z0-9_]+$" }
+        },
+        "required": ["id", "name"]
+      }
+    },
+    "dialogues": {
+      "type": "array",
+      "description": "Dialogue trees attached to characters.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^dlg_[a-z0-9_]+$" },
+          "character_id": { "type": "string", "pattern": "^char_[a-z0-9_]+$" },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string" },
+                "text": { "type": "string" },
+                "conditions": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "App-level condition expressions. Grammar TBD; keep simple for MVP."
+                },
+                "next_node_ids": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["id", "text"]
+            }
+          }
+        },
+        "required": ["id", "character_id", "nodes"]
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Document-level metadata. Separate from schema_version.",
+      "properties": {
+        "document_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Version of THIS DOCUMENT (incremented on save)."
+        },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "author": { "type": "string" }
+      },
+      "required": ["document_version", "created_at"]
+    }
+  },
+  "required": ["schema_version", "game_title", "genres", "core_loop", "mechanics", "assets", "tasks", "metadata"]
+}

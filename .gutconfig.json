@@ -1,0 +1,15 @@
+{
+  "dirs": [
+    "res://tests/"
+  ],
+  "include_subdirs": true,
+  "log_level": 1,
+  "should_exit": true,
+  "should_exit_on_success": true,
+  "should_maximize": false,
+  "opacity": 100,
+  "compact_mode": false,
+  "double_strategy": "partial",
+  "prefix": "test_",
+  "suffix": ".gd"
+}
