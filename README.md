@@ -121,6 +121,7 @@ orchestra/
 - `docs/adrs/019-cross-reference-integrity.md` — cross-entity id reference validator
 - `docs/adrs/020-chat-edit-diff-highlight.md` — LCS per-line diff with red/green highlights
 - `docs/adrs/021-3d-viewport-preview.md` — SubViewport + GLTFDocument + orbital camera
+- `docs/adrs/022-test-connection-per-credential.md` — per-row credential probe
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

@@ -15,6 +15,26 @@ extends GutTest
 const CredentialEditorScript = preload("res://scripts/ui/credential_editor.gd")
 const OrchestratorScript = preload("res://scripts/orchestrator.gd")
 const PluginRegistryScript = preload("res://scripts/plugin_registry.gd")
+const BasePluginScript = preload("res://scripts/base_plugin.gd")
+
+
+# Minimal stand-in plugin for the test_connection flow. Tests register
+# this under the name "claude" via plugin_manager.register_plugin so
+# the credential editor's Test button has a deterministic, in-process
+# probe to call — no real HTTP, no API key needed.
+class FakeCredentialPlugin extends BasePluginScript:
+	var _test_result: Dictionary = {"success": true, "message": "fake OK"}
+	var _test_calls: int = 0
+
+	func initialize(config: Dictionary) -> Dictionary:
+		return {"success": true}
+
+	func health_check() -> Dictionary:
+		return {"healthy": true, "message": "ok"}
+
+	func test_connection() -> Dictionary:
+		_test_calls += 1
+		return _test_result
 
 
 func _unique_store_path() -> String:
@@ -300,3 +320,165 @@ func test_show_dialog_rebuilds_rows_from_current_store_state():
 	assert_eq((ed._rows["claude"]["input"] as LineEdit).text, "v2",
 		"re-showing the editor must re-read the store")
 	_remove_path(ctx["path"])
+
+
+# ---------- Test connection (Phase 22 / ADR 022) ----------
+
+func test_each_row_builds_a_test_button_and_status():
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var ed: Node = _make_editor()
+	ed.bind(ctx["orch"])
+	ed.show_dialog()
+	for plugin_name in ed._rows.keys():
+		var entry: Dictionary = ed._rows[plugin_name]
+		assert_true(entry.has("test_button"),
+			"row '%s' should have a test_button" % plugin_name)
+		assert_true(entry.has("test_status"),
+			"row '%s' should have a test_status label" % plugin_name)
+	_remove_path(ctx["path"])
+
+func test_set_test_result_paints_success_in_green():
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var ed: Node = _make_editor()
+	ed.bind(ctx["orch"])
+	ed.show_dialog()
+	ed._set_test_result("claude",
+		{"success": true, "message": "OK (HTTP 200)"})
+	var status: Label = ed._rows["claude"]["test_status"]
+	assert_true(status.text.begins_with("✓"),
+		"success should render with a check mark; got: %s" % status.text)
+	assert_true("OK (HTTP 200)" in status.text)
+	# Green-ish modulate.
+	assert_gt(status.modulate.g, status.modulate.r,
+		"success status should lean green (G > R)")
+	_remove_path(ctx["path"])
+
+func test_set_test_result_paints_failure_in_red():
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var ed: Node = _make_editor()
+	ed.bind(ctx["orch"])
+	ed.show_dialog()
+	ed._set_test_result("claude",
+		{"success": false, "error": "auth failed (HTTP 401)"})
+	var status: Label = ed._rows["claude"]["test_status"]
+	assert_true(status.text.begins_with("✗"),
+		"failure should render with a cross mark; got: %s" % status.text)
+	assert_true("auth failed" in status.text)
+	# Reddish modulate.
+	assert_gt(status.modulate.r, status.modulate.g,
+		"failure status should lean red (R > G)")
+	_remove_path(ctx["path"])
+
+func test_test_pressed_without_orchestrator_paints_internal_error():
+	# Build the editor with NO orchestrator bound. The Test button
+	# is still wired; clicking it should fall into the no-orch
+	# branch instead of crashing.
+	var ed: Node = _make_editor()
+	# Don't call bind() — _orch stays null and the guard in
+	# _on_test_connection_pressed should catch it cleanly.
+	#
+	# show_dialog without orch goes into the locked-branch path,
+	# which doesn't render plugin rows. We inject a row by hand so
+	# the handler has somewhere to paint its result. Each child is
+	# add_child_autofree'd to keep GUT's orphan tracker quiet —
+	# without that, four leftover Controls would trigger the
+	# orphan warning at suite teardown.
+	var row := HBoxContainer.new()
+	var input := LineEdit.new()
+	var test_btn := Button.new()
+	var status := Label.new()
+	add_child_autofree(row)
+	add_child_autofree(input)
+	add_child_autofree(test_btn)
+	add_child_autofree(status)
+	ed._rows["claude"] = {
+		"row": row,
+		"input": input,
+		"test_button": test_btn,
+		"test_status": status,
+	}
+	ed._on_test_connection_pressed("claude")
+	assert_true(status.text.begins_with("✗"),
+		"missing-orch should produce a failure status; got: %s" % status.text)
+
+func test_test_pressed_for_unregistered_plugin_says_save_first():
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var ed: Node = _make_editor()
+	ed.bind(ctx["orch"])
+	ed.show_dialog()
+	# claude not registered — pressing Test should explain.
+	ed._on_test_connection_pressed("claude")
+	var status: Label = ed._rows["claude"]["test_status"]
+	assert_true("Save" in status.text or "not registered" in status.text,
+		"unregistered plugin should be flagged; got: %s" % status.text)
+	_remove_path(ctx["path"])
+
+func test_test_pressed_for_registered_plugin_calls_test_connection():
+	# Use a FakeCredentialPlugin registered under the name "claude" so
+	# we drive the full _on_test_connection_pressed path without
+	# hitting Anthropic's API. The fake's test_connection returns the
+	# preconfigured _test_result dictionary.
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var orch: Node = ctx["orch"]
+	var fake: FakeCredentialPlugin = FakeCredentialPlugin.new()
+	add_child_autofree(fake)
+	var pm: Node = orch.plugin_manager
+	var reg: Dictionary = pm.register_plugin("claude", fake, {})
+	assert_true(bool(reg.get("success", false)),
+		"precondition: fake plugin should register cleanly")
+	var en: Dictionary = pm.enable_plugin("claude")
+	assert_true(bool(en.get("success", false)),
+		"precondition: fake plugin should enable cleanly")
+	var ed: Node = _make_editor()
+	ed.bind(orch)
+	ed.show_dialog()
+	# Drive the click; the FakePlugin's test_connection is sync (returns
+	# a Dictionary directly, no HTTP), so the await resolves immediately.
+	await ed._on_test_connection_pressed("claude")
+	assert_eq(fake._test_calls, 1,
+		"fake plugin's test_connection should have been invoked exactly once")
+	var status: Label = ed._rows["claude"]["test_status"]
+	assert_true(status.text.begins_with("✓"),
+		"successful fake probe should render success; got: %s" % status.text)
+	# Button re-enabled after the call lands.
+	assert_false((ed._rows["claude"]["test_button"] as Button).disabled,
+		"test button should be re-enabled after the result lands")
+	_remove_path(ctx["path"])
+
+func test_test_pressed_failure_path_paints_error():
+	# Same as above but the fake reports failure — verify the failure
+	# branch of _set_test_result.
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var orch: Node = ctx["orch"]
+	var fake: FakeCredentialPlugin = FakeCredentialPlugin.new()
+	fake._test_result = {"success": false, "error": "auth failed (HTTP 401)"}
+	add_child_autofree(fake)
+	orch.plugin_manager.register_plugin("claude", fake, {})
+	orch.plugin_manager.enable_plugin("claude")
+	var ed: Node = _make_editor()
+	ed.bind(orch)
+	ed.show_dialog()
+	await ed._on_test_connection_pressed("claude")
+	var status: Label = ed._rows["claude"]["test_status"]
+	assert_true(status.text.begins_with("✗"))
+	assert_true("auth failed" in status.text)
+	_remove_path(ctx["path"])
+
+
+# ---------- Mock plugin probes (Phase 22) ----------
+
+func test_mock_3d_test_connection_returns_success():
+	var Mock3D = load("res://plugins/mock_3d_plugin.gd")
+	var p = Mock3D.new()
+	add_child_autofree(p)
+	var r: Dictionary = p.test_connection()
+	assert_true(bool(r["success"]), "mock_3d test_connection should pass")
+	assert_true(r.has("message"))
+
+func test_mock_audio_test_connection_returns_success():
+	var MockAudio = load("res://plugins/mock_audio_plugin.gd")
+	var p = MockAudio.new()
+	add_child_autofree(p)
+	var r: Dictionary = p.test_connection()
+	assert_true(bool(r["success"]), "mock_audio test_connection should pass")
+	assert_true(r.has("message"))

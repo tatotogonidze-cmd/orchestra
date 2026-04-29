@@ -23,6 +23,12 @@ func initialize(_config: Dictionary) -> Dictionary:
 func health_check() -> Dictionary:
 	return {"healthy": true, "message": "ok"}
 
+func test_connection() -> Dictionary:
+	# Mock plugin: no real backend. Always reports OK so the
+	# credential editor's Test button has something deterministic to
+	# verify against in dev / test runs.
+	return {"success": true, "message": "mock — no real backend"}
+
 func shutdown() -> void:
 	for tid in _tasks.keys():
 		_tasks[tid]["cancelled"] = true

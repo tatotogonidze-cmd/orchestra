@@ -61,6 +61,27 @@ func shutdown() -> void:
 		_tasks[tid]["cancelled"] = true
 	_tasks.clear()
 
+# Cheap probe: GET /v2/openapi/user/balance. Free, returns 200 + the
+# account's balance when the api_key is valid, 401 otherwise. Used by
+# the credential editor's Test button (ADR 022).
+func test_connection() -> Dictionary:
+	if api_key.is_empty():
+		return {"success": false, "error": "api_key not configured"}
+	var headers: PackedStringArray = PackedStringArray([
+		"Authorization: Bearer " + api_key,
+	])
+	var resp: Dictionary = await _http_request(
+		BASE_URL + "/user/balance", headers, HTTPClient.METHOD_GET, "")
+	if not bool(resp.get("success", false)):
+		return {"success": false,
+				"error": "transport: %s" % str(resp.get("error", "unknown"))}
+	var status: int = int(resp.get("response_code", 0))
+	if status >= 200 and status < 300:
+		return {"success": true, "message": "OK (HTTP %d)" % status}
+	if status == 401 or status == 403:
+		return {"success": false, "error": "auth failed (HTTP %d)" % status}
+	return {"success": false, "error": "HTTP %d" % status}
+
 
 # ---------- Generation ----------
 

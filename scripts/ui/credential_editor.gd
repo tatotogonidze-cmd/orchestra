@@ -256,14 +256,32 @@ func _build_row(plugin_name: String, store: Node) -> void:
 	)
 	row.add_child(delete)
 
+	# Phase 22 (ADR 022): per-row Test connection button + status label.
+	# The button uses the CURRENTLY REGISTERED plugin instance — so the
+	# user must Save before testing newly-typed keys. Tooltip flags this.
+	var test_btn := Button.new()
+	test_btn.text = "Test"
+	test_btn.tooltip_text = "Probe the saved api_key against the provider's API. Save first if you've changed it."
+	test_btn.pressed.connect(func() -> void:
+		_on_test_connection_pressed(plugin_name))
+	row.add_child(test_btn)
+
+	var test_status := Label.new()
+	test_status.text = ""
+	test_status.modulate = Color(0.85, 0.85, 0.85, 1.0)
+	test_status.custom_minimum_size = Vector2(160, 0)
+	row.add_child(test_status)
+
 	_rows[plugin_name] = {
-		"row":            row,
-		"name_label":     name_label,
-		"input":          input,
-		"toggle_button":  toggle,
-		"delete_button":  delete,
-		"initial_value":  initial,
-		"marked_delete":  false,
+		"row":             row,
+		"name_label":      name_label,
+		"input":           input,
+		"toggle_button":   toggle,
+		"delete_button":   delete,
+		"test_button":     test_btn,
+		"test_status":     test_status,
+		"initial_value":   initial,
+		"marked_delete":   false,
 	}
 
 
@@ -341,3 +359,70 @@ func _on_delete_pressed(plugin_name: String) -> void:
 	# on Save. Cancel still discards everything including this mark.
 	(entry["row"] as Control).modulate = Color(0.6, 0.6, 0.6, 1.0)
 	_rows[plugin_name] = entry
+
+
+# ---------- Test connection (Phase 22 / ADR 022) ----------
+
+# Click handler for the per-row Test button. Fetches the currently-
+# registered plugin instance, awaits its test_connection probe, and
+# routes the result through _set_test_result so the UI updates.
+#
+# We deliberately use the REGISTERED plugin (not the typed value):
+# probing a stale key is misleading, but coupling Test to register-
+# with-typed-key would mean either re-registering on every keystroke
+# or spinning up a temporary plugin instance per click. Documented in
+# ADR 022 follow-ups.
+func _on_test_connection_pressed(plugin_name: String) -> void:
+	if not _rows.has(plugin_name):
+		return
+	var entry: Dictionary = _rows[plugin_name]
+	# Defensive: guard against `_orch` being null OR being a Node that
+	# doesn't expose a `plugin_manager` property. Reading the property
+	# directly on a bare Node would raise an "Invalid get index" error
+	# at runtime; the `in` check keeps the failure mode polite.
+	if _orch == null or not ("plugin_manager" in _orch) \
+			or _orch.plugin_manager == null:
+		_set_test_result(plugin_name,
+			{"success": false, "error": "no orchestrator bound"})
+		return
+	var pm: Node = _orch.plugin_manager
+	var active: Dictionary = pm.active_plugins as Dictionary
+	if not active.has(plugin_name):
+		_set_test_result(plugin_name,
+			{"success": false,
+			 "error": "plugin not registered — Save the key first"})
+		return
+	var plugin: Node = active[plugin_name]
+	if plugin == null or not plugin.has_method("test_connection"):
+		_set_test_result(plugin_name,
+			{"success": false, "error": "plugin has no test_connection"})
+		return
+	# Mark in-flight visually before awaiting.
+	(entry["test_button"] as Button).disabled = true
+	(entry["test_status"] as Label).text = "testing…"
+	(entry["test_status"] as Label).modulate = Color(0.85, 0.85, 0.85, 1.0)
+	# Await the probe. Synchronous probes (mocks) return immediately;
+	# real plugins do an HTTP round-trip.
+	var result: Dictionary = await plugin.test_connection()
+	# The user may have closed the editor / switched contexts in the
+	# interim. Defensive: only paint if the row still exists.
+	if not _rows.has(plugin_name):
+		return
+	(entry["test_button"] as Button).disabled = false
+	_set_test_result(plugin_name, result)
+
+# Update the per-row test status label from a result Dictionary.
+# Public so tests can drive it without standing up a plugin probe.
+func _set_test_result(plugin_name: String, result: Dictionary) -> void:
+	if not _rows.has(plugin_name):
+		return
+	var entry: Dictionary = _rows[plugin_name]
+	var status: Label = entry["test_status"]
+	if bool(result.get("success", false)):
+		var msg: String = str(result.get("message", "OK"))
+		status.text = "✓ %s" % msg
+		status.modulate = Color(0.5, 0.9, 0.5, 1.0)
+	else:
+		var err: String = str(result.get("error", "failed"))
+		status.text = "✗ %s" % err
+		status.modulate = Color(1.0, 0.45, 0.45, 1.0)

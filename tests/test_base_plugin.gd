@@ -68,3 +68,17 @@ func test_default_param_schema_shape():
 	assert_eq(schema["type"], "object")
 	assert_true(schema.has("properties"))
 	assert_true(schema.has("required"))
+
+
+# ---------- test_connection (Phase 22 / ADR 022) ----------
+
+func test_default_test_connection_reports_not_implemented():
+	var plugin = BasePluginScript.new()
+	add_child_autofree(plugin)
+	var r: Dictionary = plugin.test_connection()
+	assert_false(bool(r["success"]),
+		"BasePlugin's default should not pretend to be connected")
+	assert_true(r.has("error"),
+		"default should explain why it didn't pass")
+	assert_true("not implemented" in str(r["error"]),
+		"error should call out that the plugin overrides this")

@@ -109,6 +109,23 @@ func get_metadata() -> Dictionary:
 func get_param_schema() -> Dictionary:
 	return {"type": "object", "properties": {}, "required": []}
 
+# Cheap probe to verify that the configured api_key + endpoint are
+# reachable. Used by the credential editor's Test button (ADR 022).
+#
+# Real plugins override this with a minimal HTTP call — typically a
+# GET against an account / voices / models endpoint, or a 1-token
+# generation. Mock plugins override with a synthetic success.
+#
+# Default reports "not supported" so the UI can render a clear
+# message rather than spinning forever or surfacing an internal
+# error. Returns {success: bool, error?: String, message?: String}.
+#
+# Implementations may use `await` (HTTPRequest pattern) — the
+# credential editor `await`s the call.
+func test_connection() -> Dictionary:
+	return {"success": false,
+			"error": "test_connection not implemented for this plugin"}
+
 # -- Helpers for subclasses --
 
 # Generate a collision-resistant task id. Format: t_<unix_ms>_<rand>
