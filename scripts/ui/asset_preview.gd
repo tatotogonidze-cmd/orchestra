@@ -69,6 +69,18 @@ var _audio_player: AudioStreamPlayer = null
 # never play.
 var _audio_path: String = ""
 
+# 3D renderer state (Phase 21 / ADR 021). Live only while
+# _current_renderer_type == "3d"; cleared in _clear_renderer.
+var _3d_subviewport: SubViewport = null
+var _3d_camera: Camera3D = null
+# Orbital-camera state in spherical coordinates around _3d_target.
+# Defaults position the camera up-and-back from the origin so a
+# typical centered model fills the viewport.
+var _3d_yaw: float = 0.0
+var _3d_pitch: float = -0.3
+var _3d_distance: float = 5.0
+var _3d_target: Vector3 = Vector3.ZERO
+
 
 func _ready() -> void:
 	anchor_right = 1.0
@@ -184,7 +196,7 @@ func show_for_asset(asset_id: String) -> void:
 		"audio":
 			_render_audio(path, str(asset.get("format", "mp3")))
 		"3d":
-			_render_3d_placeholder()
+			_render_3d(path)
 		_:
 			_render_error("unknown asset type '%s'" % asset_type)
 	visible = true
@@ -200,6 +212,10 @@ func _clear_renderer() -> void:
 		_audio_player.stop()
 	_audio_player = null
 	_audio_path = ""
+	# 3D renderer state. Member references will dangle as soon as the
+	# subviewport child is freed below, so null them first.
+	_3d_subviewport = null
+	_3d_camera = null
 	# Free immediately (not queue_free) for the same orphan-tracker
 	# reason ADR 011 documented for credential_editor.
 	for child in _content_holder.get_children():
@@ -315,14 +331,128 @@ func _render_audio(path: String, fmt: String) -> void:
 
 	_current_renderer_type = "audio"
 
-func _render_3d_placeholder() -> void:
-	var lbl := Label.new()
-	lbl.text = "3D preview is not implemented yet.\n\nThe asset was saved correctly — you can find it on disk via the metadata path. A real 3D viewer is on the scene-import follow-up (ADR 008)."
-	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_content_holder.add_child(lbl)
+func _render_3d(path: String) -> void:
+	# Always build the SubViewport scaffolding even if the GLB is
+	# missing — that way the viewport has a camera + lights ready
+	# whenever a future "Reload" affordance lands, and a hint Label
+	# can sit alongside the empty viewport.
+	#
+	# Reset orbital state so re-opening different assets doesn't
+	# inherit the previous one's camera angles.
+	_3d_yaw = 0.0
+	_3d_pitch = -0.3
+	_3d_distance = 5.0
+	_3d_target = Vector3.ZERO
+
+	var container := SubViewportContainer.new()
+	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	container.stretch = true
+	container.custom_minimum_size = Vector2(320, 240)
+	# Orbital-camera input on the container (the SubViewport itself
+	# doesn't take Control input).
+	container.gui_input.connect(_on_3d_gui_input)
+	_content_holder.add_child(container)
+
+	_3d_subviewport = SubViewport.new()
+	_3d_subviewport.size = Vector2i(640, 480)
+	# Own world so the scene we load doesn't leak into the rest of
+	# the app (we don't have any other 3D world today, but we will
+	# once scene-tester lands).
+	_3d_subviewport.own_world_3d = true
+	container.add_child(_3d_subviewport)
+
+	# Ambient + a single directional key light. Enough to make a
+	# vanilla glTF look reasonable without having to author a
+	# lighting rig.
+	var env_node := WorldEnvironment.new()
+	var env := Environment.new()
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.4, 0.4, 0.5, 1.0)
+	env.ambient_light_energy = 1.0
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(0.05, 0.05, 0.07, 1.0)
+	env_node.environment = env
+	_3d_subviewport.add_child(env_node)
+
+	var key_light := DirectionalLight3D.new()
+	key_light.rotation = Vector3(deg_to_rad(-45.0), deg_to_rad(30.0), 0.0)
+	key_light.light_energy = 1.0
+	_3d_subviewport.add_child(key_light)
+
+	_3d_camera = Camera3D.new()
+	_3d_camera.current = true
+	_3d_subviewport.add_child(_3d_camera)
+	_update_3d_camera()
+
+	# Try to load the .glb. We pre-check existence so a bogus path
+	# doesn't drop into GLTFDocument's own error path (which can
+	# push_error) — same defensive pattern as _render_audio.
+	if path.is_empty() or not FileAccess.file_exists(path):
+		_overlay_3d_message(container, "3D file not found:\n%s" % path)
+	else:
+		var doc := GLTFDocument.new()
+		var state := GLTFState.new()
+		var err: Error = doc.append_from_file(path, state)
+		if err != OK:
+			_overlay_3d_message(container,
+				"GLTF load failed (%s): %s" % [error_string(err), path])
+		else:
+			var scene: Node = doc.generate_scene(state)
+			if scene == null:
+				_overlay_3d_message(container, "GLTF produced no scene")
+			else:
+				_3d_subviewport.add_child(scene)
+
 	_current_renderer_type = "3d"
+
+# Recompute camera position from spherical orbital state. Called on
+# initial render and after every input event that mutates the angles.
+func _update_3d_camera() -> void:
+	if _3d_camera == null:
+		return
+	var x: float = cos(_3d_pitch) * sin(_3d_yaw) * _3d_distance
+	var y: float = sin(_3d_pitch) * _3d_distance
+	var z: float = cos(_3d_pitch) * cos(_3d_yaw) * _3d_distance
+	_3d_camera.position = _3d_target + Vector3(x, y, z)
+	_3d_camera.look_at(_3d_target, Vector3.UP)
+
+# Drop a small Label on top of the viewport with a status / error
+# message. Used when we can't actually render a model — the empty
+# viewport behind it still works, so the user sees the lighting and
+# can confirm the rest of the renderer is alive.
+func _overlay_3d_message(parent: Control, msg: String) -> void:
+	var lbl := Label.new()
+	lbl.text = msg
+	lbl.modulate = Color(1.0, 0.6, 0.6, 1.0)
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# Place at the top of the viewport — without anchors we'd get
+	# top-left at (0,0), which is what we want.
+	parent.add_child(lbl)
+
+# Orbital camera input handler. Called by the SubViewportContainer's
+# gui_input signal. Mouse drag (left button) rotates; scroll zooms.
+func _on_3d_gui_input(event: InputEvent) -> void:
+	if _3d_camera == null:
+		return
+	if event is InputEventMouseMotion:
+		var motion: InputEventMouseMotion = event
+		if motion.button_mask & MOUSE_BUTTON_MASK_LEFT != 0:
+			_3d_yaw -= motion.relative.x * 0.01
+			# Clamp pitch so the camera never flips through the poles —
+			# clamping at ~85° degrees keeps `look_at(UP)` stable.
+			_3d_pitch = clamp(_3d_pitch + motion.relative.y * 0.01,
+				deg_to_rad(-85.0), deg_to_rad(85.0))
+			_update_3d_camera()
+	elif event is InputEventMouseButton:
+		var btn: InputEventMouseButton = event
+		if btn.pressed:
+			if btn.button_index == MOUSE_BUTTON_WHEEL_UP:
+				_3d_distance = max(0.5, _3d_distance - 0.5)
+				_update_3d_camera()
+			elif btn.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				_3d_distance = min(50.0, _3d_distance + 0.5)
+				_update_3d_camera()
 
 
 # ---------- Metadata ----------

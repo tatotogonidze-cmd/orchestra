@@ -120,6 +120,7 @@ orchestra/
 - `docs/adrs/018-gdd-form-edit.md` — form-based GDD editing alongside chat-edit
 - `docs/adrs/019-cross-reference-integrity.md` — cross-entity id reference validator
 - `docs/adrs/020-chat-edit-diff-highlight.md` — LCS per-line diff with red/green highlights
+- `docs/adrs/021-3d-viewport-preview.md` — SubViewport + GLTFDocument + orbital camera
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

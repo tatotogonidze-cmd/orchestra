@@ -159,10 +159,10 @@ func test_audio_unsupported_format_renders_error():
 
 # ---------- 3D ----------
 
-func test_show_for_3d_asset_renders_placeholder():
-	# 3D ingest is async / network; for this UI-only test we inject the
-	# metadata directly. The renderer doesn't care that the local_path
-	# is bogus — the placeholder branch reads no file.
+func test_show_for_3d_asset_builds_subviewport_scaffolding():
+	# Phase 21: the 3d renderer always builds a SubViewport + camera +
+	# light hierarchy. With a missing file it ALSO drops a small
+	# message Label on top of the empty viewport.
 	var fake_id: String = "fake_3d_glb"
 	_orch.asset_manager._index[fake_id] = {
 		"id": fake_id,
@@ -178,9 +178,164 @@ func test_show_for_3d_asset_renders_placeholder():
 	}
 	_ed.show_for_asset(fake_id)
 	assert_eq(_ed._current_renderer_type, "3d")
-	# Placeholder is a single Label child.
+	# Single direct child: the SubViewportContainer.
 	assert_eq(_ed._content_holder.get_child_count(), 1)
-	assert_true(_ed._content_holder.get_child(0) is Label)
+	var container: Node = _ed._content_holder.get_child(0)
+	assert_true(container is SubViewportContainer,
+		"3d renderer should produce a SubViewportContainer")
+	# Container holds the SubViewport (and an overlay Label since the
+	# file is missing — that's two children).
+	assert_eq(container.get_child_count(), 2)
+	# Member refs populated.
+	assert_not_null(_ed._3d_subviewport,
+		"_3d_subviewport member should be set after a 3d render")
+	assert_not_null(_ed._3d_camera,
+		"_3d_camera member should be set after a 3d render")
+
+func test_show_for_3d_asset_subviewport_has_camera_and_light():
+	var fake_id: String = "fake_3d_glb_2"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/_nope.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	# Walk the SubViewport's children — should include Camera3D,
+	# DirectionalLight3D, WorldEnvironment in some order.
+	var has_camera: bool = false
+	var has_light: bool = false
+	var has_env: bool = false
+	for child in _ed._3d_subviewport.get_children():
+		if child is Camera3D: has_camera = true
+		if child is DirectionalLight3D: has_light = true
+		if child is WorldEnvironment: has_env = true
+	assert_true(has_camera, "subviewport should host a Camera3D")
+	assert_true(has_light, "subviewport should host a DirectionalLight3D")
+	assert_true(has_env, "subviewport should host a WorldEnvironment")
+	# The camera should be the active one for this viewport.
+	assert_true(_ed._3d_camera.current,
+		"_3d_camera should be flagged current=true")
+
+func test_3d_camera_initial_position_matches_orbital_state():
+	var fake_id: String = "fake_3d_glb_pos"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/_x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	# Defaults: yaw=0, pitch=-0.3, distance=5, target=origin.
+	# x = cos(-0.3)*sin(0)*5 = 0
+	# y = sin(-0.3)*5 ≈ -1.477
+	# z = cos(-0.3)*cos(0)*5 ≈ 4.776
+	var pos: Vector3 = _ed._3d_camera.position
+	assert_almost_eq(pos.x, 0.0, 0.001)
+	assert_almost_eq(pos.y, sin(-0.3) * 5.0, 0.01)
+	assert_almost_eq(pos.z, cos(-0.3) * 5.0, 0.01)
+
+func test_3d_mouse_drag_rotates_camera():
+	# Synthesize a left-button mouse motion. Camera should reorient
+	# according to relative motion.
+	var fake_id: String = "fake_3d_drag"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/_x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	var yaw_before: float = _ed._3d_yaw
+	var pitch_before: float = _ed._3d_pitch
+	var ev := InputEventMouseMotion.new()
+	ev.relative = Vector2(50, 30)  # drag right + down
+	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	_ed._on_3d_gui_input(ev)
+	assert_almost_eq(_ed._3d_yaw, yaw_before - 50 * 0.01, 0.001,
+		"yaw should decrease by relative.x * 0.01 with left drag")
+	assert_almost_eq(_ed._3d_pitch, pitch_before + 30 * 0.01, 0.001,
+		"pitch should increase by relative.y * 0.01")
+
+func test_3d_mouse_drag_without_left_button_is_ignored():
+	var fake_id: String = "fake_3d_no_drag"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/_x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	var yaw_before: float = _ed._3d_yaw
+	var ev := InputEventMouseMotion.new()
+	ev.relative = Vector2(50, 30)
+	ev.button_mask = 0  # no buttons held
+	_ed._on_3d_gui_input(ev)
+	assert_eq(_ed._3d_yaw, yaw_before,
+		"motion without LMB held should not move the camera")
+
+func test_3d_mouse_wheel_zoom():
+	var fake_id: String = "fake_3d_zoom"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/_x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	var dist_before: float = _ed._3d_distance
+	# Wheel up = zoom in = decrease distance.
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_WHEEL_UP
+	up.pressed = true
+	_ed._on_3d_gui_input(up)
+	assert_almost_eq(_ed._3d_distance, dist_before - 0.5, 0.001)
+	# Wheel down = zoom out.
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	down.pressed = true
+	_ed._on_3d_gui_input(down)
+	assert_almost_eq(_ed._3d_distance, dist_before, 0.001,
+		"wheel up then down should net zero distance change")
+
+func test_3d_pitch_clamped_to_avoid_pole_flip():
+	var fake_id: String = "fake_3d_clamp"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/_x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	# Drag DOWN past the pole — pitch should clamp at +85° (~1.484 rad).
+	var ev := InputEventMouseMotion.new()
+	ev.relative = Vector2(0, 10000)
+	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	_ed._on_3d_gui_input(ev)
+	assert_almost_eq(_ed._3d_pitch, deg_to_rad(85.0), 0.001,
+		"pitch should clamp at +85° to keep look_at(UP) stable")
+
+func test_3d_state_clears_on_renderer_swap():
+	# Show 3d, then show text — the 3d member refs should null out.
+	var fake_id: String = "fake_3d_swap"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/_x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	assert_not_null(_ed._3d_subviewport)
+	# Now show a text asset.
+	var r: Dictionary = await _orch.asset_manager.ingest(
+		"claude", "claude:tx",
+		{"asset_type": "text", "format": "plain", "text": "hi"})
+	_ed.show_for_asset(str(r["asset_id"]))
+	assert_eq(_ed._current_renderer_type, "text")
+	assert_null(_ed._3d_subviewport,
+		"_3d_subviewport should null out after switching renderers")
+	assert_null(_ed._3d_camera,
+		"_3d_camera should null out after switching renderers")
 
 
 # ---------- Close / Delete ----------
