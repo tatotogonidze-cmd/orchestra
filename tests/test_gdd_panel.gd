@@ -21,6 +21,9 @@ func before_each() -> void:
 	add_child_autofree(_orch)
 	# Redirect snapshot dir so we never touch real user data.
 	_orch.gdd_manager.snapshot_dir = "%s/snapshots" % _fixture_dir
+	# Phase 24: redirect settings to a per-test path so tests that
+	# write through settings_manager don't pollute user://settings.json.
+	_orch.settings_manager.configure("%s/settings.json" % _fixture_dir)
 	_panel = GddPanelScript.new()
 	add_child_autofree(_panel)
 	_panel.bind(_orch)
@@ -449,6 +452,48 @@ func test_approve_writes_two_snapshots():
 	# Pending state cleared, panel promoted the new GDD.
 	assert_true(_panel._pending_gdd.is_empty())
 	assert_eq(_panel._current_gdd["game_title"], "Approved Title")
+
+
+# ---------- Settings persistence (Phase 24) ----------
+
+func test_load_persists_path_to_settings():
+	var path: String = _write_gdd(_minimal_gdd())
+	_panel.show_dialog()
+	_panel._path_input.text = path
+	_panel._on_load_pressed()
+	# settings_manager should now hold the path under the gdd
+	# namespace.
+	var saved: String = str(_orch.settings_manager.get_value(
+		"gdd.last_path", ""))
+	assert_eq(saved, path,
+		"successful Load should persist the path through settings_manager")
+
+func test_show_dialog_prefills_path_from_settings():
+	# Pre-seed a saved path BEFORE the panel opens. Use a fresh panel
+	# (the before_each one already mutated _current_gdd_path).
+	_orch.settings_manager.set_value("gdd.last_path", "user://saved.json")
+	var fresh: Node = GddPanelScript.new()
+	add_child_autofree(fresh)
+	fresh.bind(_orch)
+	fresh.show_dialog()
+	assert_eq(fresh._path_input.text, "user://saved.json",
+		"show_dialog should prefill path from settings.gdd.last_path")
+
+func test_show_dialog_keeps_input_after_user_typed_during_session():
+	# Once the user has loaded something this session
+	# (_current_gdd_path is non-empty), reopening the panel should
+	# NOT overwrite the input — they may want to switch to a slightly-
+	# different path manually. We respect their in-session edits.
+	var path: String = _write_gdd(_minimal_gdd())
+	_panel.show_dialog()
+	_panel._path_input.text = path
+	_panel._on_load_pressed()
+	# Now the user types something else and re-shows.
+	_panel._path_input.text = "user://manual_edit.json"
+	_panel.visible = false
+	_panel.show_dialog()
+	assert_eq(_panel._path_input.text, "user://manual_edit.json",
+		"in-session manual edits should survive a hide/show cycle")
 
 
 # ---------- Per-line diff (Phase 20) ----------

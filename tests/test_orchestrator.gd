@@ -43,6 +43,7 @@ func after_each():
 # ---------- Wiring ----------
 
 func test_ready_creates_child_nodes():
+	assert_not_null(orch.settings_manager, "settings_manager not created")
 	assert_not_null(orch.plugin_manager, "plugin_manager not created")
 	assert_not_null(orch.credential_store, "credential_store not created")
 	assert_not_null(orch.asset_manager, "asset_manager not created")
@@ -50,6 +51,7 @@ func test_ready_creates_child_nodes():
 	assert_not_null(orch.gdd_manager, "gdd_manager not created")
 	assert_not_null(orch.scene_manager, "scene_manager not created")
 	# The children should be in the scene tree as this Orchestrator's children.
+	assert_eq(orch.settings_manager.get_parent(), orch)
 	assert_eq(orch.plugin_manager.get_parent(), orch)
 	assert_eq(orch.credential_store.get_parent(), orch)
 	assert_eq(orch.asset_manager.get_parent(), orch)

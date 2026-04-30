@@ -122,6 +122,11 @@ var _pending_gdd: Dictionary = {}
 # users can override before clicking Load.
 const DEFAULT_PATH: String = "user://gdd.json"
 
+# Phase 24: persist the last successfully-loaded path so the next
+# show_dialog prefills it. The setting key lives under the gdd
+# namespace so it doesn't collide with other subsystems.
+const SETTING_LAST_PATH: String = "gdd.last_path"
+
 # Tight params for the chat-edit dispatch. Low temperature so Claude
 # doesn't reinterpret existing fields creatively; high enough max_tokens
 # to fit a reasonably large GDD.
@@ -376,11 +381,36 @@ func bind(orch: Node) -> void:
 			pm.plugin_task_failed.connect(_on_chat_edit_failed)
 
 func show_dialog() -> void:
+	# Phase 24: prefill the path input from the last-used path if we
+	# haven't loaded anything yet this session. We only override the
+	# default — user mid-edit input is preserved across show/hide.
+	if _current_gdd_path.is_empty():
+		var saved: String = _read_last_path()
+		if not saved.is_empty():
+			_path_input.text = saved
 	# Always refresh on open — the snapshot timeline can change between
 	# views (a chat-edit flow that lands while the panel was closed,
 	# etc) and we want to reflect it.
 	_refresh()
 	visible = true
+
+# Helper: read the persisted last-used path, if any. Returns "" when
+# settings_manager is unavailable or the setting is unset.
+func _read_last_path() -> String:
+	if _orch == null or not ("settings_manager" in _orch):
+		return ""
+	var settings: Node = _orch.settings_manager
+	if settings == null or not settings.has_method("get_value"):
+		return ""
+	return str(settings.call("get_value", SETTING_LAST_PATH, ""))
+
+func _persist_last_path(path: String) -> void:
+	if _orch == null or not ("settings_manager" in _orch):
+		return
+	var settings: Node = _orch.settings_manager
+	if settings == null or not settings.has_method("set_value"):
+		return
+	settings.call("set_value", SETTING_LAST_PATH, path)
 
 
 # ---------- Internals ----------
@@ -534,6 +564,11 @@ func _on_load_pressed() -> void:
 		return
 	_current_gdd = (result.get("gdd", {}) as Dictionary).duplicate(true)
 	_current_gdd_path = path
+	# Phase 24: persist the loaded path so the next show_dialog opens
+	# pre-filled. Validation may still flag issues — we save the path
+	# regardless because what the user wanted to load is what they
+	# should see next time.
+	_persist_last_path(path)
 	# Surface validation issues without blocking the view — even an
 	# invalid GDD is useful to look at.
 	var v: Dictionary = _orch.gdd_manager.validate(_current_gdd)

@@ -25,6 +25,13 @@ const _CATEGORY_ORDER: Array = ["text", "audio", "image", "3d", "unknown"]
 signal closed()
 
 var _tracker: Node = null
+# Optional settings_manager for persisting the session limit across
+# app launches (Phase 24 / ADR 024). When null, Apply just drives the
+# tracker without saving — caller chose not to persist.
+var _settings: Node = null
+
+# Setting key the HUD writes when the user Applies a new limit.
+const _SETTING_KEY_LIMIT: String = "cost.session_limit"
 
 var _panel: PanelContainer
 var _vbox: VBoxContainer
@@ -139,8 +146,9 @@ func _ready() -> void:
 
 # ---------- Public API ----------
 
-func bind(tracker: Node) -> void:
+func bind(tracker: Node, settings: Node = null) -> void:
 	_tracker = tracker
+	_settings = settings
 	if tracker == null:
 		return
 	# We don't subscribe in bind() — refresh happens on every show_dialog().
@@ -240,10 +248,14 @@ func _on_apply_limit_pressed() -> void:
 	if _tracker == null:
 		return
 	var raw: String = _limit_input.text.strip_edges()
-	if raw.is_empty():
-		_tracker.call("set_session_limit", 0.0)
-	else:
-		_tracker.call("set_session_limit", float(raw))
+	var new_limit: float = 0.0
+	if not raw.is_empty():
+		new_limit = float(raw)
+	_tracker.call("set_session_limit", new_limit)
+	# Persist across launches (Phase 24). 0.0 means "no limit" — we
+	# write the value either way so removing a limit also persists.
+	if _settings != null and _settings.has_method("set_value"):
+		_settings.call("set_value", _SETTING_KEY_LIMIT, new_limit)
 	# Repaint to reflect new limit + refreshed banner.
 	_refresh()
 

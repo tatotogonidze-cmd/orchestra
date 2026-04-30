@@ -19,10 +19,12 @@ const UnlockDialogScript = preload("res://scripts/ui/unlock_dialog.gd")
 
 # A minimal stand-in for Orchestrator. Captures the password it was given
 # (so tests can assert it was passed through verbatim) and returns
-# whatever `_outcome` is set to.
+# whatever `_outcome` is set to. settings_manager is optional and only
+# set by tests that exercise the Phase 24 always-skip persistence flow.
 class FakeOrch extends Node:
 	var _outcome: Dictionary = {"success": true, "registered": []}
 	var calls: Array = []
+	var settings_manager: Node = null
 
 	func unlock_and_register(password: String) -> Dictionary:
 		calls.append(password)
@@ -247,3 +249,65 @@ func test_non_escape_keys_are_ignored():
 	ev.pressed = true
 	dlg._unhandled_input(ev)
 	assert_signal_not_emitted(dlg, "skipped")
+
+
+# ---------- Always-skip persistence (Phase 24 / ADR 024) ----------
+
+const SettingsManagerScript = preload("res://scripts/settings_manager.gd")
+
+func _make_fake_orch_with_settings() -> Dictionary:
+	var fake: FakeOrch = FakeOrch.new()
+	add_child_autofree(fake)
+	var settings: Node = SettingsManagerScript.new()
+	add_child_autofree(settings)
+	settings.configure("user://_test_unlock_settings_%d_%d.json" % [
+		Time.get_ticks_msec(), randi() % 100000])
+	fake.settings_manager = settings
+	return {"orch": fake, "settings": settings}
+
+func test_dialog_builds_always_skip_checkbox():
+	var dlg: Node = _make_dialog()
+	assert_not_null(dlg._always_skip_checkbox,
+		"_always_skip_checkbox should be built (Phase 24)")
+	assert_false(dlg._always_skip_checkbox.button_pressed,
+		"checkbox should default to unchecked")
+
+func test_skip_with_checkbox_persists_always_skip_true():
+	var ctx: Dictionary = _make_fake_orch_with_settings()
+	var dlg: Node = _make_dialog()
+	dlg.bind(ctx["orch"])
+	dlg.show_dialog()
+	dlg._always_skip_checkbox.button_pressed = true
+	dlg._on_skip_pressed()
+	assert_true(bool((ctx["settings"] as Node).get_value(
+			"credentials.always_skip", false)),
+		"Skip with checkbox enabled should persist always_skip=true")
+
+func test_skip_without_checkbox_persists_always_skip_false():
+	var ctx: Dictionary = _make_fake_orch_with_settings()
+	var dlg: Node = _make_dialog()
+	dlg.bind(ctx["orch"])
+	dlg.show_dialog()
+	dlg._always_skip_checkbox.button_pressed = false
+	dlg._on_skip_pressed()
+	# Skipping without the checkbox shouldn't accidentally enable
+	# always-skip — it should explicitly persist false.
+	assert_false(bool((ctx["settings"] as Node).get_value(
+			"credentials.always_skip", true)),
+		"Skip with checkbox disabled should persist always_skip=false")
+
+func test_successful_unlock_clears_always_skip():
+	# A user who previously enabled always-skip and now actively
+	# unlocks has changed their mind. The flag should clear so the
+	# next launch shows the dialog again.
+	var ctx: Dictionary = _make_fake_orch_with_settings()
+	(ctx["settings"] as Node).set_value("credentials.always_skip", true)
+	var dlg: Node = _make_dialog()
+	(ctx["orch"] as FakeOrch)._outcome = {"success": true, "registered": []}
+	dlg.bind(ctx["orch"])
+	dlg.show_dialog()
+	dlg._password_input.text = "hunter2"
+	dlg._on_unlock_pressed()
+	assert_false(bool((ctx["settings"] as Node).get_value(
+			"credentials.always_skip", true)),
+		"successful unlock should clear the always_skip flag")

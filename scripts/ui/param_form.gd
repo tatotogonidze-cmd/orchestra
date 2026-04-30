@@ -56,6 +56,19 @@ var _rows: Dictionary = {}
 # rebuilding the whole tree.
 var _header_label: Label
 
+# Phase 25 / ADR 025: per-plugin persistence context. When both are
+# set, set_schema reads saved values to override defaults and
+# persist_values() writes the form state back through settings on
+# submit. When either is empty/null, persistence is a no-op (the
+# form behaves exactly as in Phase 15).
+var _plugin_name: String = ""
+var _settings: Node = null
+
+# Setting-key prefix for persisted params. The full key shape is
+# `plugin.<plugin_name>.params.<field>` — matches the dotted
+# namespacing convention from ADR 024.
+const _SETTING_KEY_PREFIX: String = "plugin"
+
 
 func _ready() -> void:
 	_header_label = Label.new()
@@ -69,8 +82,17 @@ func _ready() -> void:
 # ---------- Public API ----------
 
 # Replace the entire form with widgets derived from `schema`.
-func set_schema(schema: Dictionary) -> void:
+#
+# Phase 25 (ADR 025): when `plugin_name` and `settings` are both
+# provided, the form's defaults get overridden by any persisted
+# values for that plugin (key shape:
+# `plugin.<plugin_name>.params.<field>`). Calls without those args
+# behave exactly as in Phase 15 — pure schema-driven defaults.
+func set_schema(schema: Dictionary, plugin_name: String = "",
+		settings: Node = null) -> void:
 	clear()
+	_plugin_name = plugin_name
+	_settings = settings
 	if schema.is_empty():
 		_header_label.text = "Parameters (none)"
 		return
@@ -82,7 +104,14 @@ func set_schema(schema: Dictionary) -> void:
 	for field_name in (props as Dictionary).keys():
 		var spec = (props as Dictionary)[field_name]
 		if spec is Dictionary:
-			_build_row(str(field_name), spec as Dictionary)
+			# Override schema default with persisted value when present.
+			# We duplicate the spec to avoid mutating the caller's
+			# schema Dictionary.
+			var effective: Dictionary = (spec as Dictionary).duplicate(true)
+			var saved: Variant = _read_saved_value(str(field_name))
+			if saved != null:
+				effective["default"] = saved
+			_build_row(str(field_name), effective)
 
 # Drop every field row but keep the header. Used between renders so we
 # never accumulate stale widgets — same orphan-tracker reasoning as the
@@ -132,7 +161,45 @@ func get_values() -> Dictionary:
 	return out
 
 
+# Phase 25: write current form values back through settings under
+# `plugin.<plugin_name>.params.<field>`. No-op when no settings or
+# plugin_name has been bound. Empty strings (already filtered by
+# get_values) don't get written — same skip logic as the
+# get_values "trailing default empty string" rule.
+#
+# Called by generate_form on a successful Generate dispatch — we
+# only persist values the user actively committed to a real call,
+# not values they were idly poking at.
+func persist_values() -> void:
+	if _settings == null or _plugin_name.is_empty():
+		return
+	if not _settings.has_method("set_value"):
+		return
+	var values: Dictionary = get_values()
+	for field_name in values.keys():
+		var key: String = _setting_key_for(str(field_name))
+		_settings.call("set_value", key, values[field_name])
+
+
 # ---------- Internals ----------
+
+# Read a persisted param value for the current (_plugin_name) plugin,
+# or null if missing / no settings bound. Returning null lets the
+# caller fall back to the schema's own default.
+func _read_saved_value(field_name: String) -> Variant:
+	if _settings == null or _plugin_name.is_empty():
+		return null
+	if not _settings.has_method("has_value") or not _settings.has_method("get_value"):
+		return null
+	var key: String = _setting_key_for(field_name)
+	if not _settings.call("has_value", key):
+		return null
+	return _settings.call("get_value", key)
+
+# Build the dotted setting key for a given field of the current plugin.
+func _setting_key_for(field_name: String) -> String:
+	return "%s.%s.params.%s" % [_SETTING_KEY_PREFIX, _plugin_name, field_name]
+
 
 func _build_row(field_name: String, spec: Dictionary) -> void:
 	var t: String = str(spec.get("type", "string"))

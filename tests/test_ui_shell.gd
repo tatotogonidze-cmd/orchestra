@@ -188,6 +188,49 @@ func test_generate_form_param_form_populated_from_selected_plugin():
 	assert_true(pf._rows.has("max_tokens"),
 		"param form should include claude's 'max_tokens' field")
 
+func test_generate_form_restores_persisted_params_for_plugin():
+	# Phase 25: with settings_manager carrying a persisted value for
+	# plugin.claude.params.max_tokens, binding the form should let
+	# param_form override the schema default with the saved value.
+	var orch: Node = _make_orch()
+	# Per-test settings path so we don't touch real user data.
+	orch.settings_manager.configure(
+		"user://_test_genform_persist_%d_%d.json" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	orch.settings_manager.set_value("plugin.claude.params.max_tokens", 2048)
+	orch.register_plugin_with_config("claude", {"api_key": "sk-ant-test"})
+	var form: Node = GenerateFormScript.new()
+	add_child_autofree(form)
+	form.bind(orch)
+	var pf: Node = form._param_form
+	# Saved value should win over claude's schema default of 1024.
+	var sb: SpinBox = pf._rows["max_tokens"]["control"] as SpinBox
+	assert_eq(int(sb.value), 2048,
+		"persisted plugin.claude.params.max_tokens should override schema default")
+
+func test_generate_form_submit_persists_param_values():
+	# Phase 25: clicking Generate (with a non-empty prompt) should
+	# persist the currently-displayed param form into settings.
+	var orch: Node = _make_orch()
+	orch.settings_manager.configure(
+		"user://_test_genform_submit_%d_%d.json" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	orch.register_plugin_with_config("claude", {"api_key": "sk-ant-test"})
+	var form: Node = GenerateFormScript.new()
+	add_child_autofree(form)
+	form.bind(orch)
+	# Mutate a param.
+	var pf: Node = form._param_form
+	(pf._rows["max_tokens"]["control"] as SpinBox).value = 4096
+	# Need a non-empty prompt to reach the persist branch in _on_submit.
+	form._prompt_input.text = "test prompt"
+	form._on_submit()
+	# Persisted value present now.
+	var saved: Variant = orch.settings_manager.get_value(
+		"plugin.claude.params.max_tokens")
+	assert_eq(int(saved), 4096,
+		"submit should persist current param values via settings_manager")
+
 func test_generate_form_param_form_clears_when_no_plugins():
 	# With nothing registered, the dropdown shows the disabled
 	# placeholder row, _refresh_param_form_for_selection bails out via

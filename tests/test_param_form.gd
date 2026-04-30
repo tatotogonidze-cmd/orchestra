@@ -191,6 +191,121 @@ func test_clear_removes_all_rows_but_keeps_header():
 	# Header should still be in the tree as a child of f.
 	assert_true(f._header_label.is_inside_tree())
 
+# ---------- Per-plugin persistence (Phase 25 / ADR 025) ----------
+
+const SettingsManagerScript = preload("res://scripts/settings_manager.gd")
+
+func _make_settings() -> Node:
+	var s: Node = SettingsManagerScript.new()
+	add_child_autofree(s)
+	# Per-test path so we never touch the real user://settings.json.
+	s.configure("user://_test_pf_settings_%d_%d.json" % [
+		Time.get_ticks_msec(), randi() % 100000])
+	return s
+
+func test_set_schema_with_settings_overrides_default():
+	# Persisted value should win over the schema's own default when
+	# the form opens.
+	var settings: Node = _make_settings()
+	settings.set_value("plugin.claude.params.max_tokens", 2048)
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"max_tokens": {
+				"type": "integer", "minimum": 1, "maximum": 8192, "default": 1024,
+			},
+		},
+	}, "claude", settings)
+	var sb: SpinBox = f._rows["max_tokens"]["control"] as SpinBox
+	assert_eq(int(sb.value), 2048,
+		"persisted value should override the schema's default")
+
+func test_set_schema_without_settings_uses_schema_default():
+	# Backwards-compat: calling set_schema with one argument behaves
+	# exactly as in Phase 15 — pure schema-driven defaults.
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"max_tokens": {
+				"type": "integer", "minimum": 1, "maximum": 8192, "default": 1024,
+			},
+		},
+	})
+	var sb: SpinBox = f._rows["max_tokens"]["control"] as SpinBox
+	assert_eq(int(sb.value), 1024,
+		"without settings, schema default should apply unchanged")
+
+func test_set_schema_without_plugin_name_skips_persistence_lookup():
+	# Even when settings is provided, an empty plugin_name disables
+	# the lookup. Defends against an accidental empty-name path
+	# clobbering one plugin's keys with another's.
+	var settings: Node = _make_settings()
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 1024},
+		},
+	}, "", settings)
+	assert_eq(int((f._rows["max_tokens"]["control"] as SpinBox).value), 1024,
+		"empty plugin_name should fall back to schema default")
+
+func test_persist_values_writes_through_settings():
+	var settings: Node = _make_settings()
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"flag":  {"type": "boolean", "default": false},
+			"count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3},
+			"name":  {"type": "string", "default": "alpha"},
+		},
+	}, "claude", settings)
+	# Mutate as the user would.
+	(f._rows["flag"]["control"] as CheckBox).button_pressed = true
+	(f._rows["count"]["control"] as SpinBox).value = 7
+	(f._rows["name"]["control"] as LineEdit).text = "beta"
+	f.persist_values()
+	# Each field should now be saved under the plugin's namespace.
+	assert_true(bool(settings.get_value("plugin.claude.params.flag")),
+		"boolean field should persist")
+	assert_eq(int(settings.get_value("plugin.claude.params.count")), 7,
+		"integer field should persist")
+	assert_eq(settings.get_value("plugin.claude.params.name"), "beta",
+		"string field should persist")
+
+func test_persist_values_no_op_without_settings():
+	# Without a bound settings_manager, persist_values should be a
+	# silent no-op — same backwards-compat shape as Phase 15.
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3},
+		},
+	})
+	(f._rows["count"]["control"] as SpinBox).value = 7
+	f.persist_values()  # should not crash
+	pass_test("persist_values without settings is a graceful no-op")
+
+func test_persist_values_no_op_without_plugin_name():
+	# Same defensive path: settings present but plugin_name empty.
+	var settings: Node = _make_settings()
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3},
+		},
+	}, "", settings)
+	(f._rows["count"]["control"] as SpinBox).value = 7
+	f.persist_values()
+	assert_eq(settings.keys().size(), 0,
+		"persist_values with empty plugin_name should not write anything")
+
+
 func test_set_schema_replaces_previous_schema():
 	# Re-rendering with a new schema should drop the old controls — no
 	# stale orphans, no double widgets.

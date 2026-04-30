@@ -40,6 +40,7 @@ const AssetManagerScript = preload("res://scripts/asset_manager.gd")
 const CostTrackerScript = preload("res://scripts/cost_tracker.gd")
 const GDDManagerScript = preload("res://scripts/gdd_manager.gd")
 const SceneManagerScript = preload("res://scripts/scene_manager.gd")
+const SettingsManagerScript = preload("res://scripts/settings_manager.gd")
 const BasePluginScript = preload("res://scripts/base_plugin.gd")
 
 signal ready_for_work()
@@ -54,6 +55,7 @@ var asset_manager: Node
 var cost_tracker: Node
 var gdd_manager: Node
 var scene_manager: Node
+var settings_manager: Node
 
 # Set of plugin names successfully registered so far. A plugin shows up here
 # only after register_plugin returned success AND enable_plugin returned success.
@@ -67,6 +69,14 @@ var _prompts_by_task: Dictionary = {}
 
 
 func _ready() -> void:
+	# settings_manager goes FIRST so subsequent managers can read
+	# persisted preferences during their own initialization (Phase 24
+	# / ADR 024). cost_tracker uses this to restore session_limit;
+	# UI overlays read last-used paths and feature toggles.
+	settings_manager = SettingsManagerScript.new()
+	settings_manager.name = "SettingsManager"
+	add_child(settings_manager)
+
 	plugin_manager = PluginManagerScript.new()
 	plugin_manager.name = "PluginManager"
 	add_child(plugin_manager)
@@ -85,6 +95,13 @@ func _ready() -> void:
 	# EventBus.cost_incurred) runs in the right tree. shutdown() resets
 	# it; the node lifetime matches the orchestrator.
 	add_child(cost_tracker)
+	# Restore the persisted session limit, if any. settings_manager
+	# loaded its file in its own _ready above, so the value is
+	# available now.
+	var saved_limit: float = float(
+		settings_manager.get_value("cost.session_limit", 0.0))
+	if saved_limit > 0.0:
+		cost_tracker.set_session_limit(saved_limit)
 
 	gdd_manager = GDDManagerScript.new()
 	gdd_manager.name = "GDDManager"

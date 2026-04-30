@@ -156,3 +156,55 @@ func test_escape_is_noop_when_hidden():
 	ev.pressed = true
 	h._unhandled_input(ev)
 	assert_signal_not_emitted(h, "closed")
+
+
+# ---------- Settings persistence (Phase 24 / ADR 024) ----------
+
+const SettingsManagerScript = preload("res://scripts/settings_manager.gd")
+
+func _make_settings() -> Node:
+	var s: Node = SettingsManagerScript.new()
+	add_child_autofree(s)
+	# Per-test path so we never touch real user settings.
+	s.configure("user://_test_settings_hud_%d_%d.json" % [
+		Time.get_ticks_msec(), randi() % 100000])
+	return s
+
+func test_apply_limit_persists_via_settings():
+	var ctx: Dictionary = _make_hud_with_tracker()
+	var h: Node = ctx["hud"]
+	var settings: Node = _make_settings()
+	# Re-bind with settings — bind accepts (tracker, settings).
+	h.bind(ctx["tracker"], settings)
+	h.show_dialog()
+	h._limit_input.text = "33.5"
+	h._on_apply_limit_pressed()
+	assert_almost_eq(float(settings.get_value("cost.session_limit", 0.0)),
+		33.5, 0.001,
+		"Apply should write the new limit through settings_manager")
+
+func test_apply_blank_persists_zero():
+	# Clearing the field should persist 0.0 — not just leave the old
+	# value lying around.
+	var ctx: Dictionary = _make_hud_with_tracker()
+	var settings: Node = _make_settings()
+	settings.set_value("cost.session_limit", 50.0)
+	(ctx["hud"] as Node).bind(ctx["tracker"], settings)
+	(ctx["hud"] as Node).show_dialog()
+	(ctx["hud"] as Node)._limit_input.text = ""
+	(ctx["hud"] as Node)._on_apply_limit_pressed()
+	assert_almost_eq(float(settings.get_value("cost.session_limit", -1.0)),
+		0.0, 0.001,
+		"Apply with blank field should persist 0.0 (no limit)")
+
+func test_apply_without_settings_works_without_persistence():
+	# When settings is null (default bind arg), the HUD just drives
+	# the tracker. No crash, no persistence — same as before Phase 24.
+	var ctx: Dictionary = _make_hud_with_tracker()
+	var h: Node = ctx["hud"]
+	# Default bind — no settings argument.
+	h.bind(ctx["tracker"])
+	h.show_dialog()
+	h._limit_input.text = "5"
+	h._on_apply_limit_pressed()
+	assert_almost_eq((ctx["tracker"] as Node).get_session_limit(), 5.0, 0.001)

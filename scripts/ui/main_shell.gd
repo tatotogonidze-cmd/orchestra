@@ -82,7 +82,27 @@ func _ready() -> void:
 				unlock_dialog.unlocked.connect(_on_dialog_unlocked)
 			if not unlock_dialog.skipped.is_connected(_on_dialog_skipped):
 				unlock_dialog.skipped.connect(_on_dialog_skipped)
-			unlock_dialog.show_dialog()
+			# Phase 24: respect the user's "always skip on next launch"
+			# preference. If set, we bypass the unlock dialog entirely
+			# and just register whatever env-vars are exposed —
+			# behaviourally identical to clicking Skip.
+			if _autoload_always_skip(orch):
+				if orch.has_method("register_all_available"):
+					orch.call("register_all_available")
+					_log_register_diagnostics(orch)
+			else:
+				unlock_dialog.show_dialog()
+
+# Read the persisted "always skip" preference. Returns false when the
+# orchestrator has no settings_manager or the setting is unset.
+func _autoload_always_skip(orch: Node) -> bool:
+	if not ("settings_manager" in orch):
+		return false
+	var settings: Node = orch.settings_manager
+	if settings == null or not settings.has_method("get_value"):
+		return false
+	return bool(settings.call("get_value",
+		"credentials.always_skip", false))
 
 
 # ---------- Public API ----------
@@ -108,8 +128,11 @@ func bind_orchestrator(orch: Node) -> void:
 	# we hand them just that. Keeps each overlay's dependency surface
 	# narrow.
 	var tracker: Node = orch.cost_tracker if "cost_tracker" in orch else null
+	var settings: Node = orch.settings_manager if "settings_manager" in orch else null
 	cost_footer.bind(tracker)
-	budget_hud.bind(tracker)
+	# Pass settings so the HUD's Apply persists the session limit
+	# across launches (Phase 24 / ADR 024).
+	budget_hud.bind(tracker, settings)
 	if not cost_footer.hud_requested.is_connected(_on_hud_requested):
 		cost_footer.hud_requested.connect(_on_hud_requested)
 	if not cost_footer.lock_requested.is_connected(_on_lock_requested):

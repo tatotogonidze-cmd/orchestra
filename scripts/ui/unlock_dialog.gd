@@ -49,6 +49,15 @@ var _password_input: LineEdit
 var _error_label: Label
 var _unlock_button: Button
 var _skip_button: Button
+# Phase 24: opt-in checkbox so the user can elect "I never want to see
+# this dialog again — just use env-vars". On Skip with this checked we
+# write `credentials.always_skip = true` to settings_manager. On a
+# successful Unlock we ALWAYS clear the flag so the user's deliberate
+# action wins over the persisted preference.
+var _always_skip_checkbox: CheckBox
+
+# Setting key the dialog writes / reads.
+const SETTING_ALWAYS_SKIP: String = "credentials.always_skip"
 
 
 func _ready() -> void:
@@ -107,6 +116,13 @@ func _ready() -> void:
 	_error_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
 	_error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_vbox.add_child(_error_label)
+
+	# "Always skip" opt-in for users who never want this dialog again.
+	# Lives above the action buttons so it visually pairs with the Skip
+	# button it modifies. Persisted via settings_manager (Phase 24).
+	_always_skip_checkbox = CheckBox.new()
+	_always_skip_checkbox.text = "Always skip on next launch (use env-vars only)"
+	_vbox.add_child(_always_skip_checkbox)
 
 	var btn_row := HBoxContainer.new()
 	btn_row.alignment = BoxContainer.ALIGNMENT_END
@@ -180,12 +196,34 @@ func _on_unlock_pressed() -> void:
 		_password_input.text = ""
 		return
 	var registered: Array = result.get("registered", []) as Array
+	# Successful unlock = user has actively chosen NOT to skip. Clear
+	# any persisted "always skip" preference so future launches don't
+	# silently bypass the dialog.
+	_persist_always_skip(false)
 	visible = false
 	emit_signal("unlocked", registered)
 
 func _on_skip_pressed() -> void:
+	# If the user opted in to "always skip", persist that preference
+	# so the next launch bypasses this dialog entirely. main_shell
+	# reads the flag and short-circuits the autoload-time show_dialog
+	# call.
+	if _always_skip_checkbox != null:
+		_persist_always_skip(_always_skip_checkbox.button_pressed)
 	visible = false
 	emit_signal("skipped")
+
+# Helper: write the always-skip preference to settings_manager if one
+# is reachable. We poke through the orchestrator rather than wiring
+# the dialog directly to settings_manager so the dialog only knows
+# about its single bound orchestrator dependency.
+func _persist_always_skip(value: bool) -> void:
+	if _orch == null:
+		return
+	var settings: Node = _orch.settings_manager if "settings_manager" in _orch else null
+	if settings == null or not settings.has_method("set_value"):
+		return
+	settings.call("set_value", SETTING_ALWAYS_SKIP, value)
 
 # Escape acts like Skip — same UX as a desktop dialog where Esc dismisses
 # without committing. Only fires when the overlay is visible so a stray

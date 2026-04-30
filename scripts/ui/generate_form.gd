@@ -18,6 +18,10 @@ extends VBoxContainer
 const ParamFormScript = preload("res://scripts/ui/param_form.gd")
 
 var _orch: Node = null
+# Phase 25: settings_manager reference, captured from orch on bind.
+# Passed through to param_form so per-plugin params restore on
+# selection-change and persist on submit.
+var _settings: Node = null
 
 var _plugin_dropdown: OptionButton
 var _prompt_input: TextEdit
@@ -76,6 +80,13 @@ func _ready() -> void:
 
 func bind(orch: Node) -> void:
 	_orch = orch
+	# Phase 25: capture settings_manager for per-plugin param
+	# persistence. Optional — when absent, param_form falls back to
+	# pure schema defaults (Phase 15 behaviour).
+	if orch != null and "settings_manager" in orch:
+		_settings = orch.settings_manager
+	else:
+		_settings = null
 	refresh_plugins()
 	# Track enable/disable events so the dropdown is always current.
 	var tree: SceneTree = get_tree()
@@ -142,6 +153,12 @@ func _on_submit() -> void:
 		_status_label.text = "dispatch failed (see logs)"
 		return
 	_status_label.text = "dispatched: %s" % tid
+	# Phase 25: persist this plugin's params for next time. Save-on-
+	# submit (rather than save-on-change) means accidental edits the
+	# user backs away from don't survive — only deliberate Generate
+	# clicks commit to the persistent store.
+	if _param_form != null and _param_form.has_method("persist_values"):
+		_param_form.call("persist_values")
 	# Leave the prompt in the box so the user can tweak + resubmit; they
 	# can clear it themselves. Lots of iterative prompting flows want this.
 
@@ -174,7 +191,9 @@ func _refresh_param_form_for_selection() -> void:
 		_param_form.clear()
 		return
 	var schema: Dictionary = plugin.call("get_param_schema") as Dictionary
-	_param_form.set_schema(schema)
+	# Phase 25: pass plugin_name + settings so param_form restores
+	# any persisted last-used values for this plugin.
+	_param_form.set_schema(schema, plugin_name, _settings)
 
 # Keyboard shortcut handler for the prompt input. Ctrl+Enter (or
 # Cmd+Enter on macOS — Godot maps `command_or_control_autoremap` for
