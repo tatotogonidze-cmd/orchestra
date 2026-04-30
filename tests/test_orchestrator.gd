@@ -48,12 +48,14 @@ func test_ready_creates_child_nodes():
 	assert_not_null(orch.asset_manager, "asset_manager not created")
 	assert_not_null(orch.cost_tracker, "cost_tracker not created")
 	assert_not_null(orch.gdd_manager, "gdd_manager not created")
+	assert_not_null(orch.scene_manager, "scene_manager not created")
 	# The children should be in the scene tree as this Orchestrator's children.
 	assert_eq(orch.plugin_manager.get_parent(), orch)
 	assert_eq(orch.credential_store.get_parent(), orch)
 	assert_eq(orch.asset_manager.get_parent(), orch)
 	assert_eq(orch.cost_tracker.get_parent(), orch)
 	assert_eq(orch.gdd_manager.get_parent(), orch)
+	assert_eq(orch.scene_manager.get_parent(), orch)
 
 
 # ---------- Explicit config path ----------

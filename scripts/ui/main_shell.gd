@@ -29,6 +29,7 @@ const AssetPreviewScript = preload("res://scripts/ui/asset_preview.gd")
 const CostFooterScript = preload("res://scripts/ui/cost_footer.gd")
 const BudgetHudScript = preload("res://scripts/ui/budget_hud.gd")
 const GddPanelScript = preload("res://scripts/ui/gdd_panel.gd")
+const ScenePanelScript = preload("res://scripts/ui/scene_panel.gd")
 
 # Direct references to the sub-panels so tests (and future UI code) can
 # poke at them without walking the node tree by name.
@@ -42,6 +43,7 @@ var asset_preview: Node
 var cost_footer: Node
 var budget_hud: Node
 var gdd_panel: Node
+var scene_panel: Node
 
 # The Orchestrator instance we're bound to. Usually /root/Orchestrator;
 # tests inject a fresh Orchestrator via `bind_orchestrator()`.
@@ -114,7 +116,14 @@ func bind_orchestrator(orch: Node) -> void:
 		cost_footer.lock_requested.connect(_on_lock_requested)
 	if not cost_footer.gdd_requested.is_connected(_on_gdd_requested):
 		cost_footer.gdd_requested.connect(_on_gdd_requested)
+	if not cost_footer.scenes_requested.is_connected(_on_scenes_requested):
+		cost_footer.scenes_requested.connect(_on_scenes_requested)
 	gdd_panel.bind(orch)
+	scene_panel.bind(orch)
+	# Asset preview "Add to Scene" routes through here — we create
+	# the scene and surface the scene panel in one go.
+	if not asset_preview.add_to_scene_requested.is_connected(_on_add_to_scene_requested):
+		asset_preview.add_to_scene_requested.connect(_on_add_to_scene_requested)
 	# Plugin panel "Manage credentials…" → open the editor. We connect
 	# here (rather than in _build_layout) because the panel is a long-
 	# lived child and we want the connection to point at THIS shell's
@@ -239,6 +248,14 @@ func _build_layout() -> void:
 	gdd_panel.anchor_bottom = 1.0
 	add_child(gdd_panel)
 
+	# Scene panel overlay (Phase 23). Surfaces from the cost_footer's
+	# "Scenes" button or from asset_preview's "Add to Scene" affordance.
+	scene_panel = ScenePanelScript.new()
+	scene_panel.name = "ScenePanel"
+	scene_panel.anchor_right = 1.0
+	scene_panel.anchor_bottom = 1.0
+	add_child(scene_panel)
+
 
 # ---------- Diagnostics ----------
 
@@ -356,3 +373,39 @@ func _on_lock_requested() -> void:
 # "GDD" pressed in the footer → show the Game Design Document overlay.
 func _on_gdd_requested() -> void:
 	gdd_panel.show_dialog()
+
+# "Scenes" pressed in the footer → show the Scene Tester overlay.
+func _on_scenes_requested() -> void:
+	scene_panel.show_dialog()
+
+# "Add to scene" pressed inside asset_preview → create a fresh scene
+# named after the asset's prompt (truncated) and seed it with the
+# asset_id, then surface the scene panel so the user lands on the
+# new scene already selected.
+#
+# This is the simplest useful flow for MVP — the user can rename
+# from scene_manager.rename_scene later once a UI rename affordance
+# lands. Adding to an EXISTING scene with picker UX is in the ADR
+# 023 follow-ups.
+func _on_add_to_scene_requested(asset_id: String) -> void:
+	if _orch == null or _orch.scene_manager == null \
+			or _orch.asset_manager == null:
+		return
+	var meta: Dictionary = _orch.asset_manager.get_asset(asset_id)
+	if meta.is_empty():
+		return
+	var prompt: String = str(meta.get("prompt", ""))
+	# Trim to a reasonable scene name. Empty prompts (rare) fall back
+	# to a generic counter-style name.
+	var name: String = prompt.substr(0, 40).strip_edges()
+	if name.is_empty():
+		name = "Scene %d" % (_orch.scene_manager.count() + 1)
+	var r: Dictionary = _orch.scene_manager.create_scene(
+		name, [asset_id], _orch.asset_manager)
+	if not bool(r.get("success", false)):
+		push_warning("[main_shell] add_to_scene failed: %s"
+			% str(r.get("error", "unknown")))
+		return
+	# Pre-select the scene we just made so the panel lands focused.
+	scene_panel._selected_scene_id = str(r["scene_id"])
+	scene_panel.show_dialog()

@@ -57,6 +57,9 @@ func test_main_shell_builds_its_panels():
 	# GDD panel overlay (Phase 16). Surfaces from cost_footer's GDD
 	# button; same hidden-by-default lifecycle.
 	assert_not_null(shell.gdd_panel, "gdd_panel not built")
+	# Scene panel overlay (Phase 23). Surfaces from cost_footer's
+	# Scenes button or asset_preview's "Add to scene" affordance.
+	assert_not_null(shell.scene_panel, "scene_panel not built")
 
 func test_main_shell_binds_panels_to_orchestrator():
 	var shell: Control = MainShellScript.new()

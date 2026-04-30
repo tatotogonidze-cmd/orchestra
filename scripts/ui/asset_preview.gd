@@ -34,6 +34,10 @@ const PluginRegistryScript = preload("res://scripts/plugin_registry.gd")
 
 signal closed()
 signal delete_requested(asset_id: String)
+# Phase 23: emitted when the user clicks "Add to scene". main_shell
+# routes the asset_id into scene_manager.create_scene + opens
+# scene_panel so the user can verify / extend.
+signal add_to_scene_requested(asset_id: String)
 
 var _orch: Node = null
 
@@ -48,6 +52,7 @@ var _metadata_label: Label
 var _footer: HBoxContainer
 var _close_button: Button
 var _delete_button: Button
+var _add_to_scene_button: Button
 
 # Tracking the currently-displayed asset so Delete can address it
 # without a fresh lookup.
@@ -148,6 +153,12 @@ func _ready() -> void:
 	_close_button.text = "Close"
 	_close_button.pressed.connect(_on_close_pressed)
 	_footer.add_child(_close_button)
+
+	_add_to_scene_button = Button.new()
+	_add_to_scene_button.text = "Add to scene"
+	_add_to_scene_button.tooltip_text = "Create a scene with this asset and open the Scene Tester"
+	_add_to_scene_button.pressed.connect(_on_add_to_scene_pressed)
+	_footer.add_child(_add_to_scene_button)
 
 	_delete_button = Button.new()
 	_delete_button.text = "Delete"
@@ -515,6 +526,15 @@ func _on_delete_pressed() -> void:
 	_clear_renderer()
 	visible = false
 	emit_signal("delete_requested", aid)
+
+func _on_add_to_scene_pressed() -> void:
+	# Phase 23: keep this overlay's surface area minimal — just emit
+	# the request. main_shell creates the scene and surfaces the
+	# scene panel. This way the preview doesn't need a SceneManager
+	# binding of its own and the scene-creation flow stays in one place.
+	if _current_asset_id.is_empty():
+		return
+	emit_signal("add_to_scene_requested", _current_asset_id)
 
 func _on_play_pressed() -> void:
 	if _audio_player == null or _audio_player.stream == null:

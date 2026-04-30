@@ -39,6 +39,7 @@ const CredentialStoreScript = preload("res://scripts/credential_store.gd")
 const AssetManagerScript = preload("res://scripts/asset_manager.gd")
 const CostTrackerScript = preload("res://scripts/cost_tracker.gd")
 const GDDManagerScript = preload("res://scripts/gdd_manager.gd")
+const SceneManagerScript = preload("res://scripts/scene_manager.gd")
 const BasePluginScript = preload("res://scripts/base_plugin.gd")
 
 signal ready_for_work()
@@ -52,6 +53,7 @@ var credential_store: Node
 var asset_manager: Node
 var cost_tracker: Node
 var gdd_manager: Node
+var scene_manager: Node
 
 # Set of plugin names successfully registered so far. A plugin shows up here
 # only after register_plugin returned success AND enable_plugin returned success.
@@ -90,6 +92,13 @@ func _ready() -> void:
 	# tear down on shutdown. The node lives for the orchestrator's
 	# lifetime and posts EventBus events on save / snapshot / rollback.
 	add_child(gdd_manager)
+
+	scene_manager = SceneManagerScript.new()
+	scene_manager.name = "SceneManager"
+	# SceneManager owns metadata-only scene records (Phase 23 / ADR 023).
+	# Lives for the orchestrator's lifetime; persists its index to
+	# user://scenes/index.json across runs.
+	add_child(scene_manager)
 
 	# Wire plugin completions into the asset pipeline. We also hook failures
 	# so we can clear the prompt cache — otherwise it would leak on any task

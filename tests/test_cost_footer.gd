@@ -145,3 +145,20 @@ func test_gdd_button_emits_gdd_requested():
 	f._emit_gdd_requested()
 	assert_signal_emitted(f, "gdd_requested",
 		"clicking GDD should emit gdd_requested for main_shell to surface gdd_panel")
+
+
+# ---------- Scenes button (Phase 23) ----------
+
+func test_footer_builds_scenes_button():
+	var f: Node = CostFooterScript.new()
+	add_child_autofree(f)
+	assert_not_null(f._scenes_button,
+		"_scenes_button should be built alongside the other action buttons")
+
+func test_scenes_button_emits_scenes_requested():
+	var f: Node = CostFooterScript.new()
+	add_child_autofree(f)
+	watch_signals(f)
+	f._emit_scenes_requested()
+	assert_signal_emitted(f, "scenes_requested",
+		"clicking Scenes should emit scenes_requested for main_shell to surface scene_panel")

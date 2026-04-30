@@ -63,6 +63,7 @@ orchestra/
 │   ├── credential_store.gd   # Encrypted key-value for API credentials
 │   ├── asset_manager.gd      # Content-hashed ingest of plugin outputs (text/audio/image/3d)
 │   ├── cost_tracker.gd       # Per-session spend + per-category breakdown + soft warnings
+│   ├── scene_manager.gd      # Metadata-only scene records (asset_id bundles)
 │   └── ui/
 │       ├── main_shell.gd     # Root Control — assembles the four panels
 │       ├── plugin_panel.gd   # Plugin list + status (left sidebar)
@@ -76,7 +77,8 @@ orchestra/
 │       ├── budget_hud.gd     # Detailed cost / breakdown / limit modal
 │       ├── param_form.gd     # Plugin-param schema → typed inputs
 │       ├── gdd_panel.gd      # GDD viewer + chat-edit + form-edit
-│       └── gdd_edit_form.gd  # Form-based GDD editor sub-component
+│       ├── gdd_edit_form.gd  # Form-based GDD editor sub-component
+│       └── scene_panel.gd    # Scene tester: list + preview + add/remove assets
 ├── plugins/
 │   ├── mock_3d_plugin.gd     # Stress test: 3D generator
 │   ├── mock_audio_plugin.gd  # Stress test: audio generator + RATE_LIMIT trigger
@@ -122,6 +124,7 @@ orchestra/
 - `docs/adrs/020-chat-edit-diff-highlight.md` — LCS per-line diff with red/green highlights
 - `docs/adrs/021-3d-viewport-preview.md` — SubViewport + GLTFDocument + orbital camera
 - `docs/adrs/022-test-connection-per-credential.md` — per-row credential probe
+- `docs/adrs/023-scene-tester-preview-pipeline.md` — metadata-only scene tester + 3D preview
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

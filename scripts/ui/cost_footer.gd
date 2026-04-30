@@ -24,6 +24,8 @@ signal hud_requested()
 signal lock_requested()
 # Emitted when the user clicks "GDD". main_shell wires to gdd_panel.
 signal gdd_requested()
+# Emitted when the user clicks "Scenes". main_shell wires to scene_panel.
+signal scenes_requested()
 
 # Default modulate per state. We modulate the cost label, not the whole
 # panel, so the panel background stays consistent.
@@ -39,6 +41,7 @@ var _remaining_label: Label
 var _hud_button: Button
 var _lock_button: Button
 var _gdd_button: Button
+var _scenes_button: Button
 
 # Track the last "state" we painted so tests can assert without parsing
 # a Color out of modulate (which is also valid — but a string is easier
@@ -78,6 +81,12 @@ func _ready() -> void:
 	_gdd_button.tooltip_text = "Open the Game Design Document viewer"
 	_gdd_button.pressed.connect(_emit_gdd_requested)
 	_hbox.add_child(_gdd_button)
+
+	_scenes_button = Button.new()
+	_scenes_button.text = "Scenes"
+	_scenes_button.tooltip_text = "Open the Scene Tester to assemble + preview scenes"
+	_scenes_button.pressed.connect(_emit_scenes_requested)
+	_hbox.add_child(_scenes_button)
 
 	_hud_button = Button.new()
 	_hud_button.text = "Budget HUD"
@@ -173,3 +182,6 @@ func _emit_lock_requested() -> void:
 
 func _emit_gdd_requested() -> void:
 	emit_signal("gdd_requested")
+
+func _emit_scenes_requested() -> void:
+	emit_signal("scenes_requested")
