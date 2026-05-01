@@ -30,6 +30,7 @@ const CostFooterScript = preload("res://scripts/ui/cost_footer.gd")
 const BudgetHudScript = preload("res://scripts/ui/budget_hud.gd")
 const GddPanelScript = preload("res://scripts/ui/gdd_panel.gd")
 const ScenePanelScript = preload("res://scripts/ui/scene_panel.gd")
+const HeaderBarScript = preload("res://scripts/ui/header_bar.gd")
 
 # Direct references to the sub-panels so tests (and future UI code) can
 # poke at them without walking the node tree by name.
@@ -44,6 +45,20 @@ var cost_footer: Node
 var budget_hud: Node
 var gdd_panel: Node
 var scene_panel: Node
+var header_bar: Node
+
+# Phase 28: lazy PopupMenu for the "Add to scene" picker. Built on
+# first request, repopulated each time the asset_preview's button
+# fires so the list of existing scenes stays current. The asset_id
+# being added is captured in `_pending_add_asset_id` for the
+# id_pressed callback to consume.
+var _scene_picker_popup: PopupMenu
+var _pending_add_asset_id: String = ""
+
+# Reserved menu id for the "+ New scene…" entry. Real scene_ids
+# are mapped to indices 0..N-1; we use a high integer to avoid
+# clashing with those.
+const _NEW_SCENE_MENU_ID: int = 99999
 
 # The Orchestrator instance we're bound to. Usually /root/Orchestrator;
 # tests inject a fresh Orchestrator via `bind_orchestrator()`.
@@ -133,14 +148,19 @@ func bind_orchestrator(orch: Node) -> void:
 	# Pass settings so the HUD's Apply persists the session limit
 	# across launches (Phase 24 / ADR 024).
 	budget_hud.bind(tracker, settings)
+	# Phase 27: action signals come from header_bar now. cost_footer
+	# kept its hud_requested signal for click-anywhere-on-status →
+	# open HUD as a convenience affordance, so that one stays wired.
 	if not cost_footer.hud_requested.is_connected(_on_hud_requested):
 		cost_footer.hud_requested.connect(_on_hud_requested)
-	if not cost_footer.lock_requested.is_connected(_on_lock_requested):
-		cost_footer.lock_requested.connect(_on_lock_requested)
-	if not cost_footer.gdd_requested.is_connected(_on_gdd_requested):
-		cost_footer.gdd_requested.connect(_on_gdd_requested)
-	if not cost_footer.scenes_requested.is_connected(_on_scenes_requested):
-		cost_footer.scenes_requested.connect(_on_scenes_requested)
+	if not header_bar.hud_requested.is_connected(_on_hud_requested):
+		header_bar.hud_requested.connect(_on_hud_requested)
+	if not header_bar.lock_requested.is_connected(_on_lock_requested):
+		header_bar.lock_requested.connect(_on_lock_requested)
+	if not header_bar.gdd_requested.is_connected(_on_gdd_requested):
+		header_bar.gdd_requested.connect(_on_gdd_requested)
+	if not header_bar.scenes_requested.is_connected(_on_scenes_requested):
+		header_bar.scenes_requested.connect(_on_scenes_requested)
 	gdd_panel.bind(orch)
 	scene_panel.bind(orch)
 	# Asset preview "Add to Scene" routes through here — we create
@@ -175,15 +195,23 @@ func bind_orchestrator(orch: Node) -> void:
 # ---------- Layout ----------
 
 func _build_layout() -> void:
-	# Outer VBox so the cost_footer can sit at the bottom while the
-	# three-panel HBox takes the remaining vertical space. The shell
-	# itself is anchored to fill the viewport and the VBox follows.
+	# Outer VBox holds the three layers in order:
+	#   [header_bar  — fixed height, action buttons]
+	#   [hbox        — three-panel body, expand_v]
+	#   [cost_footer — fixed height, status only]
+	# Phase 27 (ADR 027) split header_bar out from cost_footer.
 	var outer_vbox := VBoxContainer.new()
 	outer_vbox.name = "OuterVBox"
 	outer_vbox.anchor_right = 1.0
 	outer_vbox.anchor_bottom = 1.0
 	outer_vbox.add_theme_constant_override("separation", 0)
 	add_child(outer_vbox)
+
+	# Top: header bar (action buttons + title).
+	header_bar = HeaderBarScript.new()
+	header_bar.name = "HeaderBar"
+	header_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	outer_vbox.add_child(header_bar)
 
 	var hbox := HBoxContainer.new()
 	hbox.name = "HBox"
@@ -401,34 +429,98 @@ func _on_gdd_requested() -> void:
 func _on_scenes_requested() -> void:
 	scene_panel.show_dialog()
 
-# "Add to scene" pressed inside asset_preview → create a fresh scene
-# named after the asset's prompt (truncated) and seed it with the
-# asset_id, then surface the scene panel so the user lands on the
-# new scene already selected.
-#
-# This is the simplest useful flow for MVP — the user can rename
-# from scene_manager.rename_scene later once a UI rename affordance
-# lands. Adding to an EXISTING scene with picker UX is in the ADR
-# 023 follow-ups.
+# "Add to scene" pressed inside asset_preview. Phase 28 (ADR 028)
+# upgraded this from "always create a new scene" to a PopupMenu
+# picker:
+#   • each existing scene maps to its own menu id (0..N-1)
+#   • a final "+ New scene…" entry maps to _NEW_SCENE_MENU_ID
+# The id_pressed callback resolves the chosen menu id back to a
+# scene_id (or empty for "new") and calls _add_asset_to_scene_choice.
 func _on_add_to_scene_requested(asset_id: String) -> void:
 	if _orch == null or _orch.scene_manager == null \
 			or _orch.asset_manager == null:
 		return
-	var meta: Dictionary = _orch.asset_manager.get_asset(asset_id)
-	if meta.is_empty():
+	# Lazy-build the popup on first use. Adding it to the scene tree
+	# now lets show_centered work later.
+	if _scene_picker_popup == null:
+		_scene_picker_popup = PopupMenu.new()
+		_scene_picker_popup.name = "ScenePickerPopup"
+		_scene_picker_popup.id_pressed.connect(_on_scene_picker_id_pressed)
+		add_child(_scene_picker_popup)
+	# Repopulate the menu — scene list may have changed since the
+	# last open.
+	_scene_picker_popup.clear()
+	var scenes: Array = _orch.scene_manager.list_scenes()
+	for i in range(scenes.size()):
+		var s: Dictionary = scenes[i]
+		var asset_count: int = (s.get("asset_ids", []) as Array).size() \
+			if s.get("asset_ids", []) is Array else 0
+		_scene_picker_popup.add_item(
+			"%s (%d assets)" % [str(s.get("name", "?")), asset_count],
+			i)
+	if not scenes.is_empty():
+		_scene_picker_popup.add_separator()
+	_scene_picker_popup.add_item("+ New scene…", _NEW_SCENE_MENU_ID)
+	# Stash the pending asset_id so the id_pressed handler knows
+	# which asset to act on. We don't pass it through the signal
+	# because PopupMenu.id_pressed only carries the id.
+	_pending_add_asset_id = asset_id
+	# Center on the shell — gives a predictable spawn even when the
+	# asset_preview's footer button isn't directly clickable (tests).
+	_scene_picker_popup.popup_centered()
+
+# Resolve the user's menu pick into either "create new scene" or
+# "add to existing scene", then dispatch.
+func _on_scene_picker_id_pressed(id: int) -> void:
+	var asset_id: String = _pending_add_asset_id
+	_pending_add_asset_id = ""
+	if asset_id.is_empty():
 		return
-	var prompt: String = str(meta.get("prompt", ""))
-	# Trim to a reasonable scene name. Empty prompts (rare) fall back
-	# to a generic counter-style name.
-	var name: String = prompt.substr(0, 40).strip_edges()
-	if name.is_empty():
-		name = "Scene %d" % (_orch.scene_manager.count() + 1)
-	var r: Dictionary = _orch.scene_manager.create_scene(
-		name, [asset_id], _orch.asset_manager)
-	if not bool(r.get("success", false)):
-		push_warning("[main_shell] add_to_scene failed: %s"
-			% str(r.get("error", "unknown")))
+	if id == _NEW_SCENE_MENU_ID:
+		_add_asset_to_scene_choice(asset_id, "")
 		return
-	# Pre-select the scene we just made so the panel lands focused.
-	scene_panel._selected_scene_id = str(r["scene_id"])
-	scene_panel.show_dialog()
+	# Map back to scene_id by re-listing (ordering may differ if a
+	# scene was deleted in the interim — tolerate that by guarding
+	# bounds and re-listing fresh).
+	var scenes: Array = _orch.scene_manager.list_scenes()
+	if id < 0 or id >= scenes.size():
+		return
+	_add_asset_to_scene_choice(asset_id, str(scenes[id].get("id", "")))
+
+# Branch point for the picker: empty scene_id = create a new scene
+# named after the asset's prompt (preserves Phase 23 behaviour);
+# non-empty = add the asset to that existing scene.
+#
+# Public-ish (no leading underscore) so tests can drive it directly
+# without fighting the PopupMenu interaction model.
+func _add_asset_to_scene_choice(asset_id: String, scene_id: String) -> void:
+	if _orch == null or _orch.scene_manager == null \
+			or _orch.asset_manager == null:
+		return
+	if scene_id.is_empty():
+		# Create-new flow (Phase 23 behaviour).
+		var meta: Dictionary = _orch.asset_manager.get_asset(asset_id)
+		if meta.is_empty():
+			return
+		var prompt: String = str(meta.get("prompt", ""))
+		var name: String = prompt.substr(0, 40).strip_edges()
+		if name.is_empty():
+			name = "Scene %d" % (_orch.scene_manager.count() + 1)
+		var r: Dictionary = _orch.scene_manager.create_scene(
+			name, [asset_id], _orch.asset_manager)
+		if not bool(r.get("success", false)):
+			push_warning("[main_shell] add_to_scene (new) failed: %s"
+				% str(r.get("error", "unknown")))
+			return
+		scene_panel._selected_scene_id = str(r["scene_id"])
+		scene_panel.show_dialog()
+	else:
+		# Add-to-existing flow (Phase 28).
+		var r: Dictionary = _orch.scene_manager.add_asset_to_scene(
+			scene_id, asset_id, _orch.asset_manager)
+		if not bool(r.get("success", false)):
+			push_warning("[main_shell] add_to_scene (existing) failed: %s"
+				% str(r.get("error", "unknown")))
+			return
+		scene_panel._selected_scene_id = scene_id
+		scene_panel.show_dialog()

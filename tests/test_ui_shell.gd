@@ -54,6 +54,10 @@ func test_main_shell_builds_its_panels():
 	# status bar at the bottom; HUD is a modal overlay.
 	assert_not_null(shell.cost_footer, "cost_footer not built")
 	assert_not_null(shell.budget_hud, "budget_hud not built")
+	# Header bar (Phase 27 / ADR 027). Action buttons (GDD / Scenes /
+	# Budget HUD / Lock now) live here now; cost_footer kept the
+	# status surface only.
+	assert_not_null(shell.header_bar, "header_bar not built")
 	# GDD panel overlay (Phase 16). Surfaces from cost_footer's GDD
 	# button; same hidden-by-default lifecycle.
 	assert_not_null(shell.gdd_panel, "gdd_panel not built")
@@ -230,6 +234,97 @@ func test_generate_form_submit_persists_param_values():
 		"plugin.claude.params.max_tokens")
 	assert_eq(int(saved), 4096,
 		"submit should persist current param values via settings_manager")
+
+# ---------- Add-to-scene picker (Phase 28 / ADR 028) ----------
+
+func test_add_asset_to_scene_choice_with_empty_id_creates_new():
+	# Phase 23 behaviour preserved when scene_id == "" — a new
+	# scene gets created from the asset's prompt.
+	var shell: Control = MainShellScript.new()
+	add_child_autofree(shell)
+	var orch: Node = _make_orch()
+	# Per-test isolation for managers that touch user://.
+	orch.scene_manager.configure(
+		"user://_test_picker_scenes_%d_%d" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	orch.asset_manager.configure(
+		"user://_test_picker_assets_%d_%d" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	shell.bind_orchestrator(orch)
+	var r: Dictionary = await orch.asset_manager.ingest(
+		"claude", "claude:p1",
+		{"asset_type": "text", "format": "plain", "text": "x"},
+		"my prompt")
+	var asset_id: String = str(r["asset_id"])
+	# Empty scene_id → new-scene branch.
+	shell._add_asset_to_scene_choice(asset_id, "")
+	# A scene was created and seeded with the asset.
+	assert_eq(orch.scene_manager.count(), 1,
+		"empty scene_id should trigger the create-new branch")
+	var scenes: Array = orch.scene_manager.list_scenes()
+	assert_eq(str(scenes[0]["asset_ids"][0]), asset_id)
+
+func test_add_asset_to_scene_choice_with_existing_id_appends():
+	var shell: Control = MainShellScript.new()
+	add_child_autofree(shell)
+	var orch: Node = _make_orch()
+	orch.scene_manager.configure(
+		"user://_test_picker_scenes2_%d_%d" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	orch.asset_manager.configure(
+		"user://_test_picker_assets2_%d_%d" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	shell.bind_orchestrator(orch)
+	# Pre-create a scene the user can pick from the picker.
+	var c: Dictionary = orch.scene_manager.create_scene(
+		"My scene", [], null)
+	var scene_id: String = str(c["scene_id"])
+	# Ingest an asset.
+	var r: Dictionary = await orch.asset_manager.ingest(
+		"claude", "claude:p2",
+		{"asset_type": "text", "format": "plain", "text": "y"})
+	var asset_id: String = str(r["asset_id"])
+	# Pick that scene.
+	shell._add_asset_to_scene_choice(asset_id, scene_id)
+	# The scene now contains the asset; no NEW scene was created.
+	assert_eq(orch.scene_manager.count(), 1,
+		"add-to-existing should not create a new scene")
+	var s: Dictionary = orch.scene_manager.get_scene(scene_id)
+	assert_eq((s["asset_ids"] as Array).size(), 1,
+		"the asset should now be in the picked scene's asset_ids")
+	assert_eq(str(s["asset_ids"][0]), asset_id)
+
+func test_add_asset_to_scene_picker_builds_popup_lazily():
+	# Calling _on_add_to_scene_requested for the first time should
+	# build the PopupMenu. We don't synthesize the popup interaction
+	# (headless can't render menu input), but we verify the popup
+	# was created and populated.
+	var shell: Control = MainShellScript.new()
+	add_child_autofree(shell)
+	var orch: Node = _make_orch()
+	orch.scene_manager.configure(
+		"user://_test_picker_pop_%d_%d" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	orch.asset_manager.configure(
+		"user://_test_picker_pop_assets_%d_%d" % [
+			Time.get_ticks_msec(), randi() % 100000])
+	shell.bind_orchestrator(orch)
+	# Pre-create one existing scene.
+	orch.scene_manager.create_scene("Existing", [], null)
+	# Ingest asset.
+	var r: Dictionary = await orch.asset_manager.ingest(
+		"claude", "claude:p3",
+		{"asset_type": "text", "format": "plain", "text": "z"})
+	shell._on_add_to_scene_requested(str(r["asset_id"]))
+	assert_not_null(shell._scene_picker_popup,
+		"first call should lazy-build the PopupMenu")
+	# 1 existing scene + 1 separator + 1 "+ New scene" entry = 3 items.
+	assert_eq(shell._scene_picker_popup.item_count, 3,
+		"popup should list existing + separator + new-scene; got: %d"
+			% shell._scene_picker_popup.item_count)
+	# Pending asset_id captured for the id_pressed callback.
+	assert_eq(shell._pending_add_asset_id, str(r["asset_id"]))
+
 
 func test_generate_form_param_form_clears_when_no_plugins():
 	# With nothing registered, the dropdown shows the disabled

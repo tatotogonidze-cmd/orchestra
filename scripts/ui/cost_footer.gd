@@ -2,33 +2,34 @@
 # Persistent status bar at the bottom of the main shell. Always visible.
 # Renders one line:
 #
-#   Session Cost: $12.34 | Budget Left: $7.66 / $20.00         [HUD ▸]
+#   Session Cost: $12.34 | Budget Left: $7.66 / $20.00
 #
 # Color shifts as we approach / cross the configured limit:
 #   - default: white-ish (no concern)
 #   - warning: amber, when CostTracker emits budget_warning_reached
 #   - over:    red,   when budget_limit_reached
 #
-# Click anywhere on the bar (or the HUD button) emits `hud_requested`.
-# main_shell catches that and pops the BudgetHUD overlay.
+# Phase 27 (ADR 027): action buttons (GDD / Scenes / Budget HUD /
+# Lock now) moved to header_bar at the top of the shell. The footer
+# is now status-only — clicking anywhere on the bar still opens the
+# HUD as a convenience affordance, since the spend/budget numbers
+# are the natural drill-in target.
 #
-# This panel is purely presentational — it doesn't drive cost recording.
-# Numbers come from the bound CostTracker via `cost_updated`.
+# This panel is purely presentational beyond the click-to-open-HUD —
+# it doesn't drive cost recording. Numbers come from the bound
+# CostTracker via `cost_updated`.
 
 extends PanelContainer
 
+# Click-to-open-HUD signal. The action buttons that used to live
+# here are now on header_bar, but a click on the spend/budget
+# numbers is a natural drill-in target so we keep this affordance.
+# main_shell wires both `header_bar.hud_requested` AND
+# `cost_footer.hud_requested` to the same `_on_hud_requested`.
 signal hud_requested()
-# Emitted when the user clicks "Lock now". main_shell wires this to
-# credential_store.lock() + a fresh unlock_dialog. Footer doesn't drive
-# either directly — keeps the credential surface in one code path.
-signal lock_requested()
-# Emitted when the user clicks "GDD". main_shell wires to gdd_panel.
-signal gdd_requested()
-# Emitted when the user clicks "Scenes". main_shell wires to scene_panel.
-signal scenes_requested()
 
-# Default modulate per state. We modulate the cost label, not the whole
-# panel, so the panel background stays consistent.
+# Default modulate per state. We modulate the cost label, not the
+# whole panel, so the panel background stays consistent.
 const COLOR_OK: Color = Color(0.85, 0.85, 0.85, 1.0)
 const COLOR_WARN: Color = Color(1.0, 0.7, 0.2, 1.0)
 const COLOR_OVER: Color = Color(1.0, 0.4, 0.4, 1.0)
@@ -38,10 +39,6 @@ var _tracker: Node = null
 var _hbox: HBoxContainer
 var _spent_label: Label
 var _remaining_label: Label
-var _hud_button: Button
-var _lock_button: Button
-var _gdd_button: Button
-var _scenes_button: Button
 
 # Track the last "state" we painted so tests can assert without parsing
 # a Color out of modulate (which is also valid — but a string is easier
@@ -50,9 +47,9 @@ var _state: String = "ok"
 
 
 func _ready() -> void:
-	# Click anywhere on the panel itself opens the HUD. We intercept
-	# at the panel level rather than only on a button so the whole bar
-	# is a target — easier to hit than a specific button.
+	# Click anywhere on the panel opens the HUD as a convenience —
+	# the panel itself is the affordance now that the action button
+	# is on header_bar.
 	gui_input.connect(_on_panel_input)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
@@ -75,29 +72,6 @@ func _ready() -> void:
 	_remaining_label.modulate = COLOR_OK
 	_remaining_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hbox.add_child(_remaining_label)
-
-	_gdd_button = Button.new()
-	_gdd_button.text = "GDD"
-	_gdd_button.tooltip_text = "Open the Game Design Document viewer"
-	_gdd_button.pressed.connect(_emit_gdd_requested)
-	_hbox.add_child(_gdd_button)
-
-	_scenes_button = Button.new()
-	_scenes_button.text = "Scenes"
-	_scenes_button.tooltip_text = "Open the Scene Tester to assemble + preview scenes"
-	_scenes_button.pressed.connect(_emit_scenes_requested)
-	_hbox.add_child(_scenes_button)
-
-	_hud_button = Button.new()
-	_hud_button.text = "Budget HUD"
-	_hud_button.pressed.connect(_emit_hud_requested)
-	_hbox.add_child(_hud_button)
-
-	_lock_button = Button.new()
-	_lock_button.text = "Lock now"
-	_lock_button.tooltip_text = "Lock the credential store and re-show the unlock dialog"
-	_lock_button.pressed.connect(_emit_lock_requested)
-	_hbox.add_child(_lock_button)
 
 
 # ---------- Public API ----------
@@ -167,7 +141,7 @@ func _on_warning(_spent: float, _limit: float) -> void:
 func _on_over(_spent: float, _limit: float) -> void:
 	_apply_state("over")
 
-# Click anywhere on the panel (not just the button) opens the HUD.
+# Click anywhere on the panel opens the HUD.
 func _on_panel_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -176,12 +150,3 @@ func _on_panel_input(event: InputEvent) -> void:
 
 func _emit_hud_requested() -> void:
 	emit_signal("hud_requested")
-
-func _emit_lock_requested() -> void:
-	emit_signal("lock_requested")
-
-func _emit_gdd_requested() -> void:
-	emit_signal("gdd_requested")
-
-func _emit_scenes_requested() -> void:
-	emit_signal("scenes_requested")

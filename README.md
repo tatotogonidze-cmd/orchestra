@@ -74,8 +74,9 @@ orchestra/
 │       ├── unlock_dialog.gd  # Master-password modal at app startup
 │       ├── credential_editor.gd  # Per-plugin api_key CRUD modal
 │       ├── asset_preview.gd  # Type-specific asset preview overlay
-│       ├── cost_footer.gd    # Persistent session-cost status bar
+│       ├── cost_footer.gd    # Persistent session-cost status bar (status only)
 │       ├── budget_hud.gd     # Detailed cost / breakdown / limit modal
+│       ├── header_bar.gd     # Top action bar — title + GDD/Scenes/HUD/Lock buttons
 │       ├── param_form.gd     # Plugin-param schema → typed inputs
 │       ├── gdd_panel.gd      # GDD viewer + chat-edit + form-edit
 │       ├── gdd_edit_form.gd  # Form-based GDD editor sub-component
@@ -129,6 +130,8 @@ orchestra/
 - `docs/adrs/024-settings-store.md` — central persistent preferences (plain JSON)
 - `docs/adrs/025-per-plugin-param-persistence.md` — restore last-used params per plugin
 - `docs/adrs/026-hard-cost-gating.md` — opt-in dispatch refusal at the limit
+- `docs/adrs/027-header-bar-refactor.md` — split action surface from status footer
+- `docs/adrs/028-ux-polish-pair.md` — reset-to-default per param + scene picker
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

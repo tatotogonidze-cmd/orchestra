@@ -1,5 +1,10 @@
 # Tests for cost_footer.gd. We drive a real CostTracker and verify the
 # footer repaints + flips state in lockstep.
+#
+# Phase 27 (ADR 027) moved action buttons to header_bar — the
+# corresponding tests live in test_header_bar.gd. The footer is
+# now status-only, plus a click-anywhere-on-status that opens the
+# Budget HUD as a convenience affordance.
 
 extends GutTest
 
@@ -23,7 +28,6 @@ func test_footer_builds_its_children():
 	add_child_autofree(f)
 	assert_not_null(f._spent_label, "_spent_label not built")
 	assert_not_null(f._remaining_label, "_remaining_label not built")
-	assert_not_null(f._hud_button, "_hud_button not built")
 
 func test_unbound_footer_shows_placeholder_message():
 	var f: Node = CostFooterScript.new()
@@ -104,61 +108,15 @@ func test_state_resets_to_ok_after_reset():
 		"reset should bring the footer back to the ok state")
 
 
-# ---------- HUD signal ----------
+# ---------- HUD signal (click-anywhere) ----------
 
-func test_hud_button_emits_hud_requested():
+func test_click_anywhere_emits_hud_requested():
+	# Phase 27 kept the click-anywhere-on-status convenience: clicking
+	# the spend/budget numbers opens the Budget HUD. The action button
+	# itself moved to header_bar.
 	var ctx: Dictionary = _make_footer_with_tracker()
 	var f: Node = ctx["footer"]
 	watch_signals(f)
-	# The button's pressed signal flows through _emit_hud_requested.
 	f._emit_hud_requested()
-	assert_signal_emitted(f, "hud_requested")
-
-
-# ---------- Lock Now button (Phase 14) ----------
-
-func test_footer_builds_lock_button():
-	var f: Node = CostFooterScript.new()
-	add_child_autofree(f)
-	assert_not_null(f._lock_button, "_lock_button should be built alongside _hud_button")
-
-func test_lock_button_emits_lock_requested():
-	var f: Node = CostFooterScript.new()
-	add_child_autofree(f)
-	watch_signals(f)
-	f._emit_lock_requested()
-	assert_signal_emitted(f, "lock_requested",
-		"clicking Lock now should emit lock_requested for main_shell to drive credential_store.lock")
-
-
-# ---------- GDD button (Phase 16) ----------
-
-func test_footer_builds_gdd_button():
-	var f: Node = CostFooterScript.new()
-	add_child_autofree(f)
-	assert_not_null(f._gdd_button, "_gdd_button should be built alongside HUD/Lock")
-
-func test_gdd_button_emits_gdd_requested():
-	var f: Node = CostFooterScript.new()
-	add_child_autofree(f)
-	watch_signals(f)
-	f._emit_gdd_requested()
-	assert_signal_emitted(f, "gdd_requested",
-		"clicking GDD should emit gdd_requested for main_shell to surface gdd_panel")
-
-
-# ---------- Scenes button (Phase 23) ----------
-
-func test_footer_builds_scenes_button():
-	var f: Node = CostFooterScript.new()
-	add_child_autofree(f)
-	assert_not_null(f._scenes_button,
-		"_scenes_button should be built alongside the other action buttons")
-
-func test_scenes_button_emits_scenes_requested():
-	var f: Node = CostFooterScript.new()
-	add_child_autofree(f)
-	watch_signals(f)
-	f._emit_scenes_requested()
-	assert_signal_emitted(f, "scenes_requested",
-		"clicking Scenes should emit scenes_requested for main_shell to surface scene_panel")
+	assert_signal_emitted(f, "hud_requested",
+		"click on the status panel should emit hud_requested as a drill-in shortcut")

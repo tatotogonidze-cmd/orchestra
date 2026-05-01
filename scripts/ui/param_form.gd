@@ -104,6 +104,11 @@ func set_schema(schema: Dictionary, plugin_name: String = "",
 	for field_name in (props as Dictionary).keys():
 		var spec = (props as Dictionary)[field_name]
 		if spec is Dictionary:
+			# Capture the ORIGINAL schema default before we mutate
+			# `effective` — the reset button (Phase 28) needs to know
+			# what to restore the control to. Saved values override
+			# what the user sees, but reset always returns to schema.
+			var schema_default: Variant = (spec as Dictionary).get("default")
 			# Override schema default with persisted value when present.
 			# We duplicate the spec to avoid mutating the caller's
 			# schema Dictionary.
@@ -111,7 +116,7 @@ func set_schema(schema: Dictionary, plugin_name: String = "",
 			var saved: Variant = _read_saved_value(str(field_name))
 			if saved != null:
 				effective["default"] = saved
-			_build_row(str(field_name), effective)
+			_build_row(str(field_name), effective, schema_default)
 
 # Drop every field row but keep the header. Used between renders so we
 # never accumulate stale widgets — same orphan-tracker reasoning as the
@@ -201,7 +206,54 @@ func _setting_key_for(field_name: String) -> String:
 	return "%s.%s.params.%s" % [_SETTING_KEY_PREFIX, _plugin_name, field_name]
 
 
-func _build_row(field_name: String, spec: Dictionary) -> void:
+# Phase 28: restore one control to the schema default and remove any
+# persisted override. Public-ish (no leading underscore) for tests
+# that drive the flow without faking a button click.
+func _on_reset_pressed(field_name: String) -> void:
+	if not _rows.has(field_name):
+		return
+	var entry: Dictionary = _rows[field_name]
+	var t: String = str(entry.get("type", ""))
+	var ctrl = entry.get("control", null)
+	if ctrl == null:
+		return
+	var schema_default: Variant = entry.get("schema_default")
+	# Restore the control's value to the schema default.
+	match t:
+		"boolean":
+			(ctrl as CheckBox).button_pressed = bool(schema_default) \
+				if schema_default != null else false
+		"integer":
+			(ctrl as SpinBox).value = float(schema_default) \
+				if schema_default != null else 0.0
+		"number":
+			(ctrl as SpinBox).value = float(schema_default) \
+				if schema_default != null else 0.0
+		"string":
+			if bool(entry.get("is_enum", false)):
+				var ob: OptionButton = ctrl as OptionButton
+				var vals: Array = entry.get("enum", []) as Array
+				var idx: int = -1
+				for i in range(vals.size()):
+					if vals[i] == schema_default:
+						idx = i
+						break
+				if idx >= 0:
+					ob.selected = idx
+				elif vals.size() > 0:
+					ob.selected = 0
+			else:
+				(ctrl as LineEdit).text = str(schema_default) \
+					if schema_default != null else ""
+	# Drop the persisted override, if any. Future renders will see no
+	# saved value and fall through to the schema default cleanly.
+	if _settings != null and not _plugin_name.is_empty() \
+			and _settings.has_method("remove_value"):
+		_settings.call("remove_value", _setting_key_for(field_name))
+
+
+func _build_row(field_name: String, spec: Dictionary,
+		schema_default: Variant = null) -> void:
 	var t: String = str(spec.get("type", "string"))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -221,7 +273,13 @@ func _build_row(field_name: String, spec: Dictionary) -> void:
 		name_label.tooltip_text = desc
 	row.add_child(name_label)
 
-	var entry: Dictionary = {"type": t, "row": row}
+	var entry: Dictionary = {
+		"type": t,
+		"row": row,
+		# Phase 28: cache the schema default so the reset button can
+		# restore even after a saved-value override.
+		"schema_default": schema_default,
+	}
 	var ctrl: Control = null
 
 	match t:
@@ -248,6 +306,20 @@ func _build_row(field_name: String, spec: Dictionary) -> void:
 		ctrl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(ctrl)
 		entry["control"] = ctrl
+
+		# Phase 28: per-row reset button. Restores the control to the
+		# schema's own default and removes any persisted override.
+		# Skipped for unsupported types (the `_` branch produces a
+		# Label, not an editable control).
+		if t in ["boolean", "integer", "number", "string"]:
+			var reset_btn := Button.new()
+			reset_btn.text = "↺"
+			reset_btn.tooltip_text = "Reset to schema default"
+			reset_btn.pressed.connect(func() -> void:
+				_on_reset_pressed(field_name))
+			row.add_child(reset_btn)
+			entry["reset_button"] = reset_btn
+
 		_rows[field_name] = entry
 
 func _make_bool_control(spec: Dictionary) -> CheckBox:

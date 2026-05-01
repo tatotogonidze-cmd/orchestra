@@ -306,6 +306,117 @@ func test_persist_values_no_op_without_plugin_name():
 		"persist_values with empty plugin_name should not write anything")
 
 
+# ---------- Reset-to-default per row (Phase 28 / ADR 028) ----------
+
+func test_row_builds_reset_button_for_supported_types():
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"a": {"type": "boolean", "default": false},
+			"b": {"type": "integer", "minimum": 0, "maximum": 10, "default": 1},
+			"c": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.5},
+			"d": {"type": "string", "default": "hello"},
+			"e": {"type": "string", "enum": ["x", "y"], "default": "x"},
+		},
+	})
+	for k in ["a", "b", "c", "d", "e"]:
+		assert_true(f._rows[k].has("reset_button"),
+			"row '%s' should have a reset_button" % k)
+
+func test_row_captures_schema_default_for_reset():
+	# The schema default is captured BEFORE saved-value override —
+	# reset always restores to schema, not to the most recent saved.
+	var settings: Node = _make_settings()
+	settings.set_value("plugin.claude.params.max_tokens", 8000)
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 1024},
+		},
+	}, "claude", settings)
+	# Saved value (8000) is what's currently shown.
+	assert_eq(int((f._rows["max_tokens"]["control"] as SpinBox).value), 8000)
+	# But the schema default (1024) is what reset will restore to.
+	assert_eq(int(f._rows["max_tokens"]["schema_default"]), 1024,
+		"schema_default should be the original 1024, not the override")
+
+func test_reset_restores_integer_to_schema_default():
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 1024},
+		},
+	})
+	# User mutated the value.
+	(f._rows["max_tokens"]["control"] as SpinBox).value = 7000
+	f._on_reset_pressed("max_tokens")
+	assert_eq(int((f._rows["max_tokens"]["control"] as SpinBox).value), 1024,
+		"reset should restore the SpinBox to the schema default")
+
+func test_reset_restores_boolean_to_schema_default():
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"flag": {"type": "boolean", "default": true},
+		},
+	})
+	(f._rows["flag"]["control"] as CheckBox).button_pressed = false
+	f._on_reset_pressed("flag")
+	assert_true((f._rows["flag"]["control"] as CheckBox).button_pressed,
+		"reset should restore the CheckBox to the schema default")
+
+func test_reset_restores_enum_to_schema_default():
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"style": {
+				"type": "string",
+				"enum": ["lowpoly", "realistic", "stylized"],
+				"default": "realistic",
+			},
+		},
+	})
+	# Move selection off the default.
+	(f._rows["style"]["control"] as OptionButton).selected = 0  # "lowpoly"
+	f._on_reset_pressed("style")
+	# realistic = index 1.
+	assert_eq((f._rows["style"]["control"] as OptionButton).selected, 1,
+		"reset should restore the OptionButton to the default's index")
+
+func test_reset_removes_persisted_override():
+	var settings: Node = _make_settings()
+	settings.set_value("plugin.claude.params.max_tokens", 8000)
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 1024},
+		},
+	}, "claude", settings)
+	assert_true(settings.has_value("plugin.claude.params.max_tokens"),
+		"precondition: persisted value should exist before reset")
+	f._on_reset_pressed("max_tokens")
+	assert_false(settings.has_value("plugin.claude.params.max_tokens"),
+		"reset should remove the persisted override so the schema default takes over on next render")
+
+func test_reset_unknown_field_is_safe_noop():
+	var f: Node = _make_form()
+	f.set_schema({
+		"type": "object",
+		"properties": {
+			"a": {"type": "integer", "default": 5},
+		},
+	})
+	# Should not crash.
+	f._on_reset_pressed("does_not_exist")
+	pass_test("reset on unknown field is a graceful no-op")
+
+
 func test_set_schema_replaces_previous_schema():
 	# Re-rendering with a new schema should drop the old controls — no
 	# stale orphans, no double widgets.
