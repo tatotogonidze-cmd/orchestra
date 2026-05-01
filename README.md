@@ -145,6 +145,8 @@ orchestra/
 - `docs/adrs/036-openai-image-plugin.md` — real text-to-image via OpenAI
 - `docs/adrs/037-mock-image-plugin.md` — synthetic PNG mock for retry + preview coverage
 - `docs/adrs/038-onboarding-empty-state-polish.md` — first-launch hints + starter-GDD seed
+- `docs/adrs/039-snapshot-annotations-and-pair-picker.md` — labelable snapshots + pair-wise diff
+- `docs/adrs/040-form-edit-enum-constraints.md` — OptionButton rendering for schema-enum fields
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

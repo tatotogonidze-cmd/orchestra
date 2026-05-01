@@ -172,14 +172,17 @@ func test_snapshots_render_after_save():
 	_orch.gdd_manager.save_gdd(_minimal_gdd(), path)
 	_orch.gdd_manager.save_gdd(_minimal_gdd(), path)
 	_panel.show_dialog()
-	# Two snapshot rows, sorted newest-first (v2 then v1).
-	assert_eq(_panel._snapshots_container.get_child_count(), 2,
-		"two saves should produce two snapshots")
-	var top_row: Node = _panel._snapshots_container.get_child(0)
+	# Phase 39 (ADR 039): with ≥2 snapshots the pair-wise picker
+	# appears as the first child, then one row per snapshot. So
+	# child layout is [picker, v2_row, v1_row] — three children
+	# total, top snapshot row at index 1.
+	assert_eq(_panel._snapshots_container.get_child_count(), 3,
+		"two saves should produce one picker + two snapshot rows")
+	var top_row: Node = _panel._snapshots_container.get_child(1)
 	assert_true(top_row is HBoxContainer)
 	var version_lbl: Label = top_row.get_child(0) as Label
 	assert_eq(version_lbl.text, "v2",
-		"newest snapshot should be at the top")
+		"newest snapshot should be at the top of the snapshot rows")
 
 
 # ---------- Close + Esc ----------
@@ -962,6 +965,119 @@ func test_entities_hint_replaced_by_rows_after_load():
 	assert_eq(_panel._entities_container.get_child_count(),
 		_panel._ENTITY_KEYS.size(),
 		"after load, entity rows should replace the hint")
+
+
+# ---------- Snapshot annotations + pair picker (Phase 39 / ADR 039) ----------
+
+func _make_three_snapshots() -> String:
+	# Save thrice — three snapshots v1/v2/v3 — so the pair picker has
+	# enough data to flex.
+	var g: Dictionary = _minimal_gdd()
+	g["game_title"] = "First"
+	var path: String = _write_gdd(g)
+	_panel.show_dialog()
+	_panel._path_input.text = path
+	_panel._on_load_pressed()
+	_orch.gdd_manager.save_gdd(g, path)  # v1
+	g["game_title"] = "Second"
+	_orch.gdd_manager.save_gdd(g, path)  # v2
+	g["game_title"] = "Third"
+	_orch.gdd_manager.save_gdd(g, path)  # v3
+	_panel._on_load_pressed()
+	return path
+
+func test_snapshot_row_has_annotation_lineedit():
+	_make_two_snapshots()
+	# Snapshots container layout: pair picker (when ≥2 snapshots)
+	# followed by one row per version. Each row is HBox: name_lbl,
+	# note_input, compare_btn, rollback_btn.
+	# Find the first row with a LineEdit child (skipping the picker row).
+	var found_lineedit: bool = false
+	for child in _panel._snapshots_container.get_children():
+		if not (child is HBoxContainer):
+			continue
+		for sub in (child as HBoxContainer).get_children():
+			if sub is LineEdit:
+				found_lineedit = true
+				break
+		if found_lineedit:
+			break
+	assert_true(found_lineedit,
+		"snapshot row should expose a LineEdit for the annotation")
+
+func test_annotation_persists_after_commit():
+	_make_two_snapshots()
+	_panel._on_annotation_committed(1, "before stealth refactor")
+	assert_eq(_orch.gdd_manager.get_snapshot_annotation(1),
+		"before stealth refactor",
+		"committed annotation should round-trip through gdd_manager")
+
+func test_annotation_renders_in_subsequent_rebuild():
+	_make_two_snapshots()
+	_orch.gdd_manager.set_snapshot_annotation(1, "labelled v1")
+	# Force the panel to re-render snapshots.
+	_panel._render_snapshots()
+	# Find v1's row and confirm its LineEdit text matches.
+	var found_text: String = ""
+	for child in _panel._snapshots_container.get_children():
+		if not (child is HBoxContainer):
+			continue
+		# Skip rows that don't start with the version label; pair picker
+		# starts with a "Compare:" label, real rows start with "vN".
+		var hb := child as HBoxContainer
+		if hb.get_child_count() == 0:
+			continue
+		var first_child: Node = hb.get_child(0)
+		if not (first_child is Label):
+			continue
+		var version_text: String = (first_child as Label).text
+		if version_text != "v1":
+			continue
+		# Find the LineEdit in this row.
+		for sub in hb.get_children():
+			if sub is LineEdit:
+				found_text = (sub as LineEdit).text
+				break
+	assert_eq(found_text, "labelled v1",
+		"annotation should pre-fill the LineEdit on rebuild")
+
+func test_pair_picker_hidden_with_fewer_than_two_snapshots():
+	_load_minimal()
+	# Single save → one snapshot. Pair picker should not be in the
+	# container (the gating check in _render_snapshots requires ≥2).
+	_orch.gdd_manager.save_gdd(_minimal_gdd(), _panel._current_gdd_path)
+	_panel._render_snapshots()
+	assert_null(_panel._pair_picker_a,
+		"pair picker shouldn't be built with only one snapshot")
+
+func test_pair_picker_visible_with_two_or_more_snapshots():
+	_make_two_snapshots()
+	assert_not_null(_panel._pair_picker_a,
+		"pair picker A dropdown should exist when ≥2 snapshots")
+	assert_not_null(_panel._pair_picker_b,
+		"pair picker B dropdown should exist when ≥2 snapshots")
+	# Each dropdown should be populated with one entry per snapshot.
+	assert_eq(_panel._pair_picker_a.item_count, 2)
+	assert_eq(_panel._pair_picker_b.item_count, 2)
+
+func test_pair_picker_default_is_oldest_to_newest():
+	_make_three_snapshots()
+	# A defaults to oldest (v1), B to newest (v3).
+	var id_a: int = _panel._pair_picker_a.get_item_id(_panel._pair_picker_a.selected)
+	var id_b: int = _panel._pair_picker_b.get_item_id(_panel._pair_picker_b.selected)
+	assert_eq(id_a, 1, "picker A should default to oldest version")
+	assert_eq(id_b, 3, "picker B should default to newest version")
+
+func test_pair_compare_drives_snapshot_diff_section():
+	_make_three_snapshots()
+	# Default is v1 → v3. Click Diff.
+	_panel._on_pair_compare_pressed()
+	assert_true(_panel._snapshot_diff_section.visible,
+		"pair compare should surface the snapshot-diff section")
+	assert_true("v1" in _panel._snapshot_diff_header.text,
+		"header should call out version A; got: %s" % _panel._snapshot_diff_header.text)
+	assert_true("v3" in _panel._snapshot_diff_header.text,
+		"header should call out version B; got: %s" % _panel._snapshot_diff_header.text)
 
 
 # ---------- Snapshot Diff Viewer (Phase 35 / ADR 035) ----------

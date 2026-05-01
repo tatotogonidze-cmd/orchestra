@@ -55,6 +55,17 @@ const _ENTITY_TYPES: Array = [
 # scene.entry_points, dialogue.nodes etc all survive a save round-
 # trip without rendering. Adding them later means appending to the
 # spec; no read-side change needed.
+#
+# Phase 40 (ADR 040): per-field "enum" entries for fields that the
+# schema constrains to a closed set. The row builder dispatches on
+# their presence — fields with "enum" render as OptionButton,
+# others stay LineEdit.
+#
+# Enum values mirror gdd_schema.json verbatim. Keeping the table
+# hard-coded (vs. parsing the schema at load time) is the same
+# trade-off as ADR 032 made for the spec itself: editorial
+# control, predictable test surface, change-on-schema-evolution
+# is a deliberate one-line update.
 const _ENTITY_FIELD_SPEC: Dictionary = {
 	"mechanics": [
 		{"key": "id",          "min_width": 150, "expand": false},
@@ -62,12 +73,17 @@ const _ENTITY_FIELD_SPEC: Dictionary = {
 	],
 	"assets": [
 		{"key": "id",   "min_width": 150, "expand": false},
-		{"key": "type", "min_width": 100, "expand": false},
+		{"key": "type", "min_width": 100, "expand": false,
+			"enum": ["3D", "Audio", "Dialogue", "Code", "Image", "Texture"]},
 		{"key": "path", "min_width": 0,   "expand": true},
 	],
 	"tasks": [
 		{"key": "id",          "min_width": 130, "expand": false},
 		{"key": "title",       "min_width": 150, "expand": false},
+		{"key": "status",      "min_width": 110, "expand": false,
+			"enum": ["Ready", "InProgress", "Blocked", "NeedsReview", "Done", "Cancelled"]},
+		{"key": "priority",    "min_width": 90,  "expand": false,
+			"enum": ["low", "medium", "high", "critical"]},
 		{"key": "description", "min_width": 0,   "expand": true},
 	],
 	"scenes": [
@@ -310,16 +326,47 @@ func _add_entity_row(entity_type: String, entry: Dictionary) -> Control:
 		var key: String = str((field as Dictionary).get("key", ""))
 		if key.is_empty():
 			continue
-		var le := LineEdit.new()
-		le.text = str(entry.get(key, ""))
-		le.placeholder_text = _placeholder_for(entity_type, key)
+		var enum_values = (field as Dictionary).get("enum", null)
+		var ctrl: Control
 		var min_w: float = float((field as Dictionary).get("min_width", 0))
+		if enum_values is Array:
+			# Phase 40 (ADR 040): closed-set field → OptionButton.
+			# Pre-select the entry's current value if it's in the enum;
+			# otherwise leave the default selection (index 0) and let
+			# the read-back path overwrite. Unknown values get logged
+			# via the placeholder-style item so the user can see they
+			# typed something out-of-schema.
+			var ob := OptionButton.new()
+			var current: String = str(entry.get(key, ""))
+			var matched_idx: int = -1
+			for i in range((enum_values as Array).size()):
+				var v: String = str((enum_values as Array)[i])
+				ob.add_item(v, i)
+				if v == current:
+					matched_idx = i
+			if not current.is_empty() and matched_idx == -1:
+				# Out-of-schema value (legacy data, hand-edit, etc) —
+				# surface it as a labelled item so we don't silently
+				# replace it. Selecting any other item will then save
+				# the in-schema value.
+				ob.add_item("(invalid: %s)" % current, (enum_values as Array).size())
+				ob.selected = (enum_values as Array).size()
+			elif matched_idx >= 0:
+				ob.selected = matched_idx
+			# else: ob.selected stays at default 0 — used when the
+			# user clicks + Add and there's no current value.
+			ctrl = ob
+		else:
+			var le := LineEdit.new()
+			le.text = str(entry.get(key, ""))
+			le.placeholder_text = _placeholder_for(entity_type, key)
+			ctrl = le
 		if min_w > 0.0:
-			le.custom_minimum_size = Vector2(min_w, 0)
+			ctrl.custom_minimum_size = Vector2(min_w, 0)
 		if bool((field as Dictionary).get("expand", false)):
-			le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(le)
-		inputs[key] = le
+			ctrl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(ctrl)
+		inputs[key] = ctrl
 
 	var remove_btn := Button.new()
 	remove_btn.text = "×"
@@ -392,20 +439,43 @@ func _read_entity_array(entity_type: String) -> Array:
 	var section: Dictionary = _entity_sections[entity_type]
 	for entry in (section["rows"] as Array):
 		var inputs: Dictionary = entry.get("inputs", {})
-		# Per-field text. We track empties separately so we can decide
-		# whether the whole row is empty (skip) or just one field is
-		# empty (still save, omit that field).
+		# Per-field value. Phase 40 (ADR 040): inputs may be either
+		# LineEdit (free-text) or OptionButton (enum). Branch on the
+		# control type when reading.
+		# We track LineEdit emptiness separately so we can decide
+		# whether the whole row is empty (skip). OptionButton defaults
+		# don't count toward "the user filled this in" — every fresh
+		# row gets selected=0, which would mark the row as non-empty
+		# even if the user never touched it.
 		var values: Dictionary = {}
-		var any_non_empty: bool = false
+		var any_user_input: bool = false
 		for key in inputs.keys():
-			var le: LineEdit = inputs[key]
-			var t: String = le.text.strip_edges()
+			var ctrl: Control = inputs[key]
+			var t: String = ""
+			if ctrl is LineEdit:
+				t = (ctrl as LineEdit).text.strip_edges()
+				if not t.is_empty():
+					any_user_input = true
+			elif ctrl is OptionButton:
+				var ob: OptionButton = ctrl as OptionButton
+				if ob.selected >= 0:
+					t = ob.get_item_text(ob.selected)
+				# Strip the legacy "(invalid: …)" wrapper that
+				# _add_entity_row attaches when the original record
+				# carried an out-of-schema value the user has now
+				# overwritten. Reading it back as the literal label
+				# would re-introduce the bad value.
+				if t.begins_with("(invalid: ") and t.ends_with(")"):
+					t = t.substr(10, t.length() - 11)
+				# OptionButton values do NOT count toward
+				# any_user_input — auto-filled defaults shouldn't
+				# turn a fresh empty row into a saved record.
 			values[key] = t
-			if not t.is_empty():
-				any_non_empty = true
-		if not any_non_empty:
-			# Pure empty row — user clicked + Add and never filled it.
-			# Skip so we don't write garbage that would fail validation.
+		if not any_user_input:
+			# Pure empty row — user clicked + Add and never typed any
+			# free-text. Skip so we don't write garbage that would fail
+			# validation. (Auto-filled enum defaults are ignored here:
+			# they don't represent user intent on their own.)
 			continue
 		# Preserve any extra fields from the original record. This is
 		# how character.stats / scene.entry_points / dialogue.nodes

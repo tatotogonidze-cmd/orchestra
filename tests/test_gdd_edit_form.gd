@@ -321,6 +321,149 @@ func test_blank_row_still_skipped_with_per_type_spec():
 		"empty per-type rows should be skipped, same as Phase 18")
 
 
+# ---------- Schema-aware enum constraints (Phase 40 / ADR 040) ----------
+
+func test_asset_type_renders_as_option_button():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [],
+		"assets": [{"id": "asset_a", "type": "Image", "path": "x.png",
+			"status": "draft", "created_at": "2026-04-25T00:00:00Z"}],
+		"tasks": [],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	var row: Dictionary = (f._entity_sections["assets"]["rows"] as Array)[0]
+	var ctrl: Control = row["inputs"]["type"]
+	assert_true(ctrl is OptionButton,
+		"asset.type should be an OptionButton, not LineEdit")
+
+func test_asset_type_preselects_current_value():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [],
+		"assets": [{"id": "asset_a", "type": "Audio", "path": "x.mp3",
+			"status": "draft", "created_at": "2026-04-25T00:00:00Z"}],
+		"tasks": [],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	var row: Dictionary = (f._entity_sections["assets"]["rows"] as Array)[0]
+	var ob: OptionButton = row["inputs"]["type"] as OptionButton
+	assert_eq(ob.get_item_text(ob.selected), "Audio",
+		"current value should be pre-selected; got: %s" % ob.get_item_text(ob.selected))
+
+func test_task_status_and_priority_render_as_option_buttons():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [],
+		"assets": [],
+		"tasks": [{
+			"id": "task_a", "title": "Do thing",
+			"status": "InProgress", "priority": "high",
+			"created_at": "2026-04-25T00:00:00Z",
+		}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	var row: Dictionary = (f._entity_sections["tasks"]["rows"] as Array)[0]
+	assert_true(row["inputs"]["status"] is OptionButton,
+		"task.status should be an OptionButton")
+	assert_true(row["inputs"]["priority"] is OptionButton,
+		"task.priority should be an OptionButton")
+	var status_ob: OptionButton = row["inputs"]["status"] as OptionButton
+	var prio_ob: OptionButton = row["inputs"]["priority"] as OptionButton
+	assert_eq(status_ob.get_item_text(status_ob.selected), "InProgress")
+	assert_eq(prio_ob.get_item_text(prio_ob.selected), "high")
+
+func test_enum_change_persists_through_get_gdd():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [],
+		"assets": [],
+		"tasks": [{
+			"id": "task_a", "title": "Do thing",
+			"status": "Ready", "priority": "low",
+			"created_at": "2026-04-25T00:00:00Z",
+		}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	# Find "Done" in the status enum and select it.
+	var row: Dictionary = (f._entity_sections["tasks"]["rows"] as Array)[0]
+	var status_ob: OptionButton = row["inputs"]["status"] as OptionButton
+	for i in range(status_ob.item_count):
+		if status_ob.get_item_text(i) == "Done":
+			status_ob.selected = i
+			break
+	var out: Dictionary = f.get_gdd()
+	assert_eq(str((out["tasks"] as Array)[0]["status"]), "Done",
+		"changed enum selection should land in the saved record")
+
+func test_enum_unrecognised_value_is_preserved_via_invalid_item():
+	# Legacy / hand-edited data may have a status not in the enum.
+	# We surface it as an "(invalid: x)" item so the user can see
+	# their out-of-schema value, AND when read back unchanged the
+	# original value round-trips.
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [],
+		"assets": [],
+		"tasks": [{
+			"id": "task_a", "title": "Legacy",
+			"status": "LegacyValue", "priority": "low",
+			"created_at": "2026-04-25T00:00:00Z",
+		}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	var out: Dictionary = f.get_gdd()
+	# Read-back should strip the "(invalid: …)" wrapper and return
+	# the original value so an unedited save preserves legacy data.
+	assert_eq(str((out["tasks"] as Array)[0]["status"]), "LegacyValue",
+		"unedited out-of-schema enum should round-trip cleanly")
+
+func test_enum_default_for_new_row_is_first_item():
+	# Adding a new task row via + Add gives empty fields.  Enum-typed
+	# fields default to selected=0; the read-back surfaces that text.
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [], "assets": [], "tasks": [],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	# Add a task row via the public API.
+	f._add_entity_row("tasks", {})
+	var row: Dictionary = (f._entity_sections["tasks"]["rows"] as Array)[0]
+	# Type something into id so the row isn't empty (would be skipped on read).
+	(row["inputs"]["id"] as LineEdit).text = "task_new"
+	var out: Dictionary = f.get_gdd()
+	# The new task should pick up the first item from each enum.
+	var t: Dictionary = (out["tasks"] as Array)[0]
+	assert_eq(str(t.get("status", "")), "Ready",
+		"new task should default to first status enum value")
+	assert_eq(str(t.get("priority", "")), "low",
+		"new task should default to first priority enum value")
+
+
 func test_set_gdd_replaces_previous_state():
 	var f: Node = _make_form()
 	f.set_gdd(_sample_gdd())

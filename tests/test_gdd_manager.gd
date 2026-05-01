@@ -410,6 +410,64 @@ func test_clean_dangling_handles_multiple_per_record():
 		"all dangling entries across all fields should be counted")
 
 
+# ---------- Snapshot annotations (Phase 39 / ADR 039) ----------
+
+func test_get_annotation_default_is_empty():
+	assert_eq(gm.get_snapshot_annotation(1), "",
+		"unset annotation should default to empty string")
+
+func test_set_and_get_annotation_round_trip():
+	# Need at least one snapshot for the directory to exist; the API
+	# itself doesn't require it (we want to set annotations even before
+	# the snapshot directory is materialised).
+	gm.save_gdd(_minimal_valid_gdd(),
+		"user://_test_anno_%d.json" % Time.get_ticks_msec())
+	gm.set_snapshot_annotation(1, "before stealth refactor")
+	assert_eq(gm.get_snapshot_annotation(1), "before stealth refactor")
+
+func test_set_annotation_trims_whitespace():
+	gm.save_gdd(_minimal_valid_gdd(),
+		"user://_test_anno_trim_%d.json" % Time.get_ticks_msec())
+	gm.set_snapshot_annotation(1, "   padded note   ")
+	assert_eq(gm.get_snapshot_annotation(1), "padded note",
+		"whitespace should be stripped on set")
+
+func test_set_empty_annotation_clears_existing():
+	gm.save_gdd(_minimal_valid_gdd(),
+		"user://_test_anno_clear_%d.json" % Time.get_ticks_msec())
+	gm.set_snapshot_annotation(1, "first note")
+	gm.set_snapshot_annotation(1, "")
+	assert_eq(gm.get_snapshot_annotation(1), "",
+		"empty input should clear the annotation")
+
+func test_list_snapshots_includes_annotation_field():
+	var path: String = "user://_test_anno_list_%d.json" % Time.get_ticks_msec()
+	gm.save_gdd(_minimal_valid_gdd(), path)
+	gm.set_snapshot_annotation(1, "labelled")
+	var snaps: Array = gm.list_snapshots()
+	assert_eq(snaps.size(), 1)
+	assert_eq(str(snaps[0].get("annotation", "")), "labelled",
+		"list_snapshots should surface annotations alongside path/version")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_annotation_persists_across_manager_instances():
+	# Annotations live on disk in the snapshot dir — a fresh manager
+	# pointed at the same dir should read the same annotations.
+	var unique_dir: String = "user://_test_anno_persist_%d_%d" % [
+		Time.get_ticks_msec(), randi() % 100000]
+	gm.snapshot_dir = unique_dir
+	gm.save_gdd(_minimal_valid_gdd(),
+		"user://_test_anno_persist_%d.json" % Time.get_ticks_msec())
+	gm.set_snapshot_annotation(1, "stamped")
+
+	var fresh = GDDManagerScript.new()
+	add_child_autofree(fresh)
+	fresh.snapshot_dir = unique_dir
+	assert_eq(fresh.get_snapshot_annotation(1), "stamped",
+		"fresh manager should read annotations from disk")
+	_rmdir_recursive(unique_dir)
+
+
 # ---------- Starter GDD (Phase 38 / ADR 038) ----------
 
 func test_create_starter_gdd_validates():

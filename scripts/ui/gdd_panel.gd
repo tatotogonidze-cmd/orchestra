@@ -123,6 +123,14 @@ var _snapshot_diff_before_view: TextEdit
 var _snapshot_diff_after_view: TextEdit
 var _snapshot_diff_close_button: Button
 
+# Phase 39 (ADR 039): pair-wise snapshot picker. Built per-render
+# inside _render_snapshots so the dropdowns stay in sync with
+# whatever versions exist. References live on `self` so tests can
+# poke them.
+var _pair_picker_a: OptionButton
+var _pair_picker_b: OptionButton
+var _pair_picker_button: Button
+
 # Last loaded GDD. Empty dict when nothing has been loaded yet (or after
 # a load failure). Tests poke at this directly to verify the load
 # pipeline.
@@ -703,20 +711,39 @@ func _render_snapshots() -> void:
 	# Sort by version descending — newest first.
 	snapshots.sort_custom(func(a, b) -> bool:
 		return int(a.get("version", 0)) > int(b.get("version", 0)))
+	# Phase 39 (ADR 039): pair-wise picker above the rows. Two version
+	# dropdowns + Compare button drive diff_versions and render into
+	# _snapshot_diff_section. Hidden when fewer than 2 snapshots exist
+	# (need at least two to pair).
+	if snapshots.size() >= 2:
+		_snapshots_container.add_child(_build_pair_picker(snapshots))
 	for s in snapshots:
 		var version: int = int(s.get("version", 0))
 		var path: String = str(s.get("path", ""))
+		var annotation: String = str(s.get("annotation", ""))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		var name_lbl := Label.new()
 		name_lbl.text = "v%d" % version
 		name_lbl.custom_minimum_size = Vector2(60, 0)
+		# Path moves to the version-label tooltip — still discoverable on
+		# hover, but no longer competes for horizontal real estate with
+		# the annotation LineEdit (Phase 39 / ADR 039).
+		name_lbl.tooltip_text = path
 		row.add_child(name_lbl)
-		var path_lbl := Label.new()
-		path_lbl.text = path
-		path_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		path_lbl.modulate = Color(0.7, 0.7, 0.7, 1.0)
-		row.add_child(path_lbl)
+		# Phase 39 (ADR 039): per-row annotation LineEdit. Replaces the
+		# silent path label as the primary identifier per row. Persists
+		# on text_submitted (Enter) and focus_exited (click away).
+		var note_input := LineEdit.new()
+		note_input.text = annotation
+		note_input.placeholder_text = "(no note — type to label this snapshot)"
+		note_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		note_input.tooltip_text = path
+		note_input.text_submitted.connect(func(_t: String) -> void:
+			_on_annotation_committed(version, note_input.text))
+		note_input.focus_exited.connect(func() -> void:
+			_on_annotation_committed(version, note_input.text))
+		row.add_child(note_input)
 		# Phase 35 (ADR 035): Compare against current. Disabled when no
 		# GDD is currently loaded — there's nothing to compare to.
 		var compare_btn := Button.new()
@@ -953,6 +980,97 @@ func _on_compare_pressed(version: int) -> void:
 
 func _on_snapshot_diff_close_pressed() -> void:
 	_snapshot_diff_section.visible = false
+
+# Phase 39 (ADR 039): build the pair-wise picker row. Two
+# dropdowns populated from the snapshot list + a Compare button
+# that drives diff_versions(). Returns the row Control for the
+# caller to add_child.
+func _build_pair_picker(snapshots: Array) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var lbl := Label.new()
+	lbl.text = "Compare:"
+	row.add_child(lbl)
+	_pair_picker_a = OptionButton.new()
+	_pair_picker_b = OptionButton.new()
+	for s in snapshots:
+		var v: int = int(s.get("version", 0))
+		var note: String = str(s.get("annotation", ""))
+		var label_text: String = ("v%d — %s" % [v, note]) if not note.is_empty() else "v%d" % v
+		_pair_picker_a.add_item(label_text, v)
+		_pair_picker_b.add_item(label_text, v)
+	# Default selection: oldest as A, newest as B (a sensible "what changed
+	# from the start to now?" answer). snapshots is sorted descending here
+	# so [0] is newest, [-1] is oldest.
+	_pair_picker_a.selected = snapshots.size() - 1
+	_pair_picker_b.selected = 0
+	row.add_child(_pair_picker_a)
+	var arrow := Label.new()
+	arrow.text = "→"
+	row.add_child(arrow)
+	row.add_child(_pair_picker_b)
+	_pair_picker_button = Button.new()
+	_pair_picker_button.text = "Diff"
+	_pair_picker_button.tooltip_text = "Line-diff between the two selected snapshots"
+	_pair_picker_button.pressed.connect(_on_pair_compare_pressed)
+	row.add_child(_pair_picker_button)
+	return row
+
+# Pair-wise compare: read the two dropdowns, ask gdd_manager to
+# build before/after JSON, and drive the existing snapshot-diff
+# section. Reuses _compute_line_diff + _apply_line_marks so the
+# two compare paths share styling.
+func _on_pair_compare_pressed() -> void:
+	if _orch == null or _orch.gdd_manager == null:
+		_status_label.text = "no orchestrator bound (internal error)"
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	if _pair_picker_a == null or _pair_picker_b == null:
+		return
+	var idx_a: int = _pair_picker_a.selected
+	var idx_b: int = _pair_picker_b.selected
+	if idx_a < 0 or idx_b < 0:
+		return
+	var version_a: int = int(_pair_picker_a.get_item_id(idx_a))
+	var version_b: int = int(_pair_picker_b.get_item_id(idx_b))
+	var r: Dictionary = _orch.gdd_manager.diff_versions(version_a, version_b)
+	if not bool(r.get("success", false)):
+		_status_label.text = "Compare failed: %s" % str(r.get("error", "unknown"))
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	var before_text: String = str(r["before_text"])
+	var after_text: String = str(r["after_text"])
+	var marks: Dictionary = _compute_line_diff(before_text, after_text)
+	var added: int = 0
+	var removed: int = 0
+	for m in (marks["after_marks"] as Array):
+		if str(m) == "added":
+			added += 1
+	for m in (marks["before_marks"] as Array):
+		if str(m) == "removed":
+			removed += 1
+	_snapshot_diff_header.text = "Snapshot v%d → v%d" % [version_a, version_b]
+	_snapshot_diff_summary_label.text = "lines: -%d  +%d" % [removed, added]
+	_snapshot_diff_before_view.text = before_text
+	_snapshot_diff_after_view.text = after_text
+	_apply_line_marks(_snapshot_diff_before_view,
+		marks["before_marks"] as Array,
+		"removed",
+		Color(1.0, 0.3, 0.3, 0.3))
+	_apply_line_marks(_snapshot_diff_after_view,
+		marks["after_marks"] as Array,
+		"added",
+		Color(0.3, 1.0, 0.3, 0.3))
+	_snapshot_diff_section.visible = true
+	_status_label.text = "Comparing v%d to v%d" % [version_a, version_b]
+	_status_label.modulate = Color(0.85, 0.85, 0.85, 1.0)
+
+# Persist the typed annotation. Normalises empty input to "no
+# annotation" via the manager's clearing semantics.
+func _on_annotation_committed(version: int, note: String) -> void:
+	if _orch == null or _orch.gdd_manager == null:
+		return
+	_orch.gdd_manager.set_snapshot_annotation(version, note)
 
 func _on_close_pressed() -> void:
 	visible = false
