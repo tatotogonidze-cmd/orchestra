@@ -86,6 +86,7 @@ orchestra/
 │   ├── mock_3d_plugin.gd     # Stress test: 3D generator
 │   ├── mock_audio_plugin.gd  # Stress test: audio generator + RATE_LIMIT trigger
 │   ├── mock_image_plugin.gd  # Stress test: image generator (writes synthetic PNGs) + RATE_LIMIT trigger
+│   ├── mock_text_plugin.gd   # Stress test: text echo + RATE_LIMIT trigger
 │   ├── tripo_plugin.gd       # Real: text-to-3D
 │   ├── elevenlabs_plugin.gd  # Real: text-to-speech
 │   ├── claude_plugin.gd      # Real: Anthropic Messages API
@@ -147,6 +148,8 @@ orchestra/
 - `docs/adrs/038-onboarding-empty-state-polish.md` — first-launch hints + starter-GDD seed
 - `docs/adrs/039-snapshot-annotations-and-pair-picker.md` — labelable snapshots + pair-wise diff
 - `docs/adrs/040-form-edit-enum-constraints.md` — OptionButton rendering for schema-enum fields
+- `docs/adrs/041-markdown-copy-to-clipboard.md` — Copy .md button + markdown_copied signal
+- `docs/adrs/042-mock-text-plugin.md` — closes real+mock symmetry across all 4 asset categories
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

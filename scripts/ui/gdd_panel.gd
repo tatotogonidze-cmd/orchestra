@@ -57,6 +57,10 @@ signal chat_edit_rejected()
 signal edit_mode_entered()
 signal edit_saved(version: int)
 signal edit_cancelled()
+# Phase 41 (ADR 041): emitted after Copy → Clipboard with the
+# generated markdown text. Tests + future observers (toast
+# notifications, recent-copies log) can subscribe.
+signal markdown_copied(text: String)
 
 var _orch: Node = null
 
@@ -70,6 +74,9 @@ var _edit_button: Button
 # Phase 34 (ADR 034): Export → Markdown. Disabled until a GDD is
 # loaded; one-click writes a .md sibling next to the loaded JSON.
 var _export_button: Button
+# Phase 41 (ADR 041): Copy to clipboard. Same gating as Export but
+# bypasses disk — useful for "I already know where this goes" flows.
+var _copy_md_button: Button
 # Phase 38 (ADR 038): Create-starter affordance. Visible ONLY when
 # no GDD is loaded — gives first-launch users a one-click way to
 # author a valid GDD at the typed path. Hidden as soon as a GDD
@@ -250,6 +257,17 @@ func _ready() -> void:
 	_export_button.disabled = true
 	_export_button.pressed.connect(_on_export_pressed)
 	path_row.add_child(_export_button)
+
+	# Phase 41 (ADR 041): Copy → Clipboard. Same gating as Export
+	# (no GDD = nothing to copy). DisplayServer.clipboard_set
+	# bypasses disk; the markdown_copied signal lets tests and
+	# future toast UIs observe.
+	_copy_md_button = Button.new()
+	_copy_md_button.text = "Copy .md"
+	_copy_md_button.tooltip_text = "Copy the GDD as Markdown to the system clipboard"
+	_copy_md_button.disabled = true
+	_copy_md_button.pressed.connect(_on_copy_md_pressed)
+	path_row.add_child(_copy_md_button)
 
 	# Phase 38 (ADR 038): Create-starter button. Inverse visibility from
 	# the others — appears ONLY when there's nothing loaded. Saves a
@@ -590,11 +608,12 @@ func _refresh() -> void:
 	_render_entities()
 	_render_snapshots()
 	_refresh_chat_edit_visibility()
-	# Edit + Export are enabled only when there's a GDD loaded. They
-	# share the same gate — there's nothing to edit or export without
-	# a loaded document.
+	# Edit + Export + Copy are enabled only when there's a GDD loaded.
+	# They share the same gate — there's nothing to edit, export, or
+	# copy without a loaded document.
 	_edit_button.disabled = _current_gdd.is_empty()
 	_export_button.disabled = _current_gdd.is_empty()
+	_copy_md_button.disabled = _current_gdd.is_empty()
 	# Phase 38: Create-starter button has the inverse gate — visible
 	# only when there's nothing loaded. The user can either Load an
 	# existing GDD OR Create a starter at the typed path.
@@ -896,6 +915,28 @@ func _on_rollback_pressed(version: int) -> void:
 	else:
 		_status_label.text = "Rollback failed: %s" % str(result.get("error", "unknown"))
 		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+
+# Phase 41 (ADR 041): Copy → Clipboard. Generates the markdown
+# in-memory (no disk I/O), pushes it to DisplayServer.clipboard_set,
+# emits markdown_copied. Surfaces success/failure on the status
+# label so the user has a visible confirmation.
+func _on_copy_md_pressed() -> void:
+	if _orch == null or _orch.gdd_manager == null:
+		_status_label.text = "no orchestrator bound (internal error)"
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	if _current_gdd.is_empty():
+		_status_label.text = "load a GDD before copying"
+		_status_label.modulate = Color(1.0, 0.7, 0.2, 1.0)
+		return
+	var text: String = _orch.gdd_manager.export_to_markdown(_current_gdd)
+	# DisplayServer is always available; clipboard_set is a no-op on
+	# headless runs but doesn't error. The signal is the reliable
+	# observable for tests + future consumers.
+	DisplayServer.clipboard_set(text)
+	_status_label.text = "Copied %d chars to clipboard" % text.length()
+	_status_label.modulate = Color(0.5, 0.9, 0.5, 1.0)
+	emit_signal("markdown_copied", text)
 
 # Phase 38 (ADR 038): Create-starter button handler. Asks gdd_manager
 # for a minimal valid GDD, writes it to the typed path, and triggers

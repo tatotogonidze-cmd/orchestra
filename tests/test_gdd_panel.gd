@@ -903,6 +903,47 @@ func test_edit_save_with_invalid_gdd_stays_in_edit_mode():
 		"failed save should leave the user in edit mode to retry")
 
 
+# ---------- Copy markdown to clipboard (Phase 41 / ADR 041) ----------
+
+func test_copy_md_button_disabled_without_gdd():
+	_panel.show_dialog()
+	assert_true(_panel._copy_md_button.disabled,
+		"Copy .md should be disabled until a GDD is loaded")
+
+func test_copy_md_button_enabled_after_load():
+	_load_minimal()
+	assert_false(_panel._copy_md_button.disabled,
+		"Copy .md should be enabled once a GDD is loaded")
+
+func test_copy_md_emits_signal_with_markdown_payload():
+	_load_minimal()
+	watch_signals(_panel)
+	_panel._on_copy_md_pressed()
+	assert_signal_emitted(_panel, "markdown_copied")
+	var params = get_signal_parameters(_panel, "markdown_copied", 0)
+	var payload: String = str(params[0])
+	assert_true(payload.length() > 0,
+		"copied markdown should be non-empty")
+	assert_true(payload.begins_with("# "),
+		"markdown should start with a heading; got: %s" % payload.substr(0, 40))
+
+func test_copy_md_status_reports_char_count():
+	_load_minimal()
+	_panel._on_copy_md_pressed()
+	assert_true("chars" in _panel._status_label.text,
+		"status should report char count; got: %s" % _panel._status_label.text)
+	assert_true("clipboard" in _panel._status_label.text,
+		"status should mention clipboard; got: %s" % _panel._status_label.text)
+
+func test_copy_md_without_loaded_gdd_does_not_crash():
+	_panel.show_dialog()
+	watch_signals(_panel)
+	_panel._on_copy_md_pressed()
+	assert_signal_not_emitted(_panel, "markdown_copied")
+	assert_true("load a GDD" in _panel._status_label.text,
+		"status should guide the user; got: %s" % _panel._status_label.text)
+
+
 # ---------- Onboarding empty-state polish (Phase 38 / ADR 038) ----------
 
 func test_create_starter_button_visible_when_no_gdd_loaded():
