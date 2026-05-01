@@ -13,15 +13,16 @@
 #
 # Layout (single row, fixed height):
 #
-#   ┌──────────────────────────────────────────────────────────┐
-#   │ Orchestra              [GDD] [Scenes] [Budget HUD] [Lock now] │
-#   └──────────────────────────────────────────────────────────┘
+#   ┌──────────────────────────────────────────────────────────────────┐
+#   │ Orchestra      [GDD] [Scenes] [Budget HUD] [Settings] [Lock now] │
+#   └──────────────────────────────────────────────────────────────────┘
 
 extends PanelContainer
 
 signal gdd_requested()
 signal scenes_requested()
 signal hud_requested()
+signal settings_requested()
 signal lock_requested()
 
 var _hbox: HBoxContainer
@@ -29,6 +30,7 @@ var _title_label: Label
 var _gdd_button: Button
 var _scenes_button: Button
 var _hud_button: Button
+var _settings_button: Button
 var _lock_button: Button
 
 
@@ -65,6 +67,15 @@ func _ready() -> void:
 	_hud_button.pressed.connect(_emit_hud_requested)
 	_hbox.add_child(_hud_button)
 
+	# Settings (Phase 33 / ADR 033) — sits between Budget HUD and
+	# Lock now to keep destructive actions (Lock) at the trailing
+	# edge.
+	_settings_button = Button.new()
+	_settings_button.text = "Settings"
+	_settings_button.tooltip_text = "Edit persisted preferences (cost limits, credential bypass, GDD path, ...)"
+	_settings_button.pressed.connect(_emit_settings_requested)
+	_hbox.add_child(_settings_button)
+
 	_lock_button = Button.new()
 	_lock_button.text = "Lock now"
 	_lock_button.tooltip_text = "Lock the credential store and re-show the unlock dialog"
@@ -82,6 +93,9 @@ func _emit_scenes_requested() -> void:
 
 func _emit_hud_requested() -> void:
 	emit_signal("hud_requested")
+
+func _emit_settings_requested() -> void:
+	emit_signal("settings_requested")
 
 func _emit_lock_requested() -> void:
 	emit_signal("lock_requested")

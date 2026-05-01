@@ -31,6 +31,7 @@ const BudgetHudScript = preload("res://scripts/ui/budget_hud.gd")
 const GddPanelScript = preload("res://scripts/ui/gdd_panel.gd")
 const ScenePanelScript = preload("res://scripts/ui/scene_panel.gd")
 const HeaderBarScript = preload("res://scripts/ui/header_bar.gd")
+const SettingsPanelScript = preload("res://scripts/ui/settings_panel.gd")
 
 # Direct references to the sub-panels so tests (and future UI code) can
 # poke at them without walking the node tree by name.
@@ -46,6 +47,7 @@ var budget_hud: Node
 var gdd_panel: Node
 var scene_panel: Node
 var header_bar: Node
+var settings_panel: Node
 
 # Phase 28: lazy PopupMenu for the "Add to scene" picker. Built on
 # first request, repopulated each time the asset_preview's button
@@ -161,8 +163,13 @@ func bind_orchestrator(orch: Node) -> void:
 		header_bar.gdd_requested.connect(_on_gdd_requested)
 	if not header_bar.scenes_requested.is_connected(_on_scenes_requested):
 		header_bar.scenes_requested.connect(_on_scenes_requested)
+	if not header_bar.settings_requested.is_connected(_on_settings_requested):
+		header_bar.settings_requested.connect(_on_settings_requested)
 	gdd_panel.bind(orch)
 	scene_panel.bind(orch)
+	# Settings panel binds directly to settings_manager — same
+	# narrowing-of-dependency pattern as cost_footer/budget_hud.
+	settings_panel.bind(settings)
 	# Asset preview "Add to Scene" routes through here — we create
 	# the scene and surface the scene panel in one go.
 	if not asset_preview.add_to_scene_requested.is_connected(_on_add_to_scene_requested):
@@ -307,6 +314,16 @@ func _build_layout() -> void:
 	scene_panel.anchor_bottom = 1.0
 	add_child(scene_panel)
 
+	# Settings panel overlay (Phase 33 / ADR 033). Surfaces from
+	# header_bar's "Settings" button. Replaces the
+	# scattered-per-consumer-UI editing model with a single
+	# registry-driven surface.
+	settings_panel = SettingsPanelScript.new()
+	settings_panel.name = "SettingsPanel"
+	settings_panel.anchor_right = 1.0
+	settings_panel.anchor_bottom = 1.0
+	add_child(settings_panel)
+
 
 # ---------- Diagnostics ----------
 
@@ -428,6 +445,11 @@ func _on_gdd_requested() -> void:
 # "Scenes" pressed in the footer → show the Scene Tester overlay.
 func _on_scenes_requested() -> void:
 	scene_panel.show_dialog()
+
+# "Settings" pressed in the header bar → show the persisted-prefs
+# editor (Phase 33 / ADR 033).
+func _on_settings_requested() -> void:
+	settings_panel.show_dialog()
 
 # "Add to scene" pressed inside asset_preview. Phase 28 (ADR 028)
 # upgraded this from "always create a new scene" to a PopupMenu

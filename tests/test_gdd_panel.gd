@@ -900,6 +900,67 @@ func test_edit_save_with_invalid_gdd_stays_in_edit_mode():
 		"failed save should leave the user in edit mode to retry")
 
 
+# ---------- Export → Markdown (Phase 34 / ADR 034) ----------
+
+func test_export_button_disabled_without_gdd():
+	_panel.show_dialog()
+	assert_true(_panel._export_button.disabled,
+		"Export should be disabled until a GDD is loaded")
+
+func test_export_button_enabled_after_load():
+	_load_minimal()
+	assert_false(_panel._export_button.disabled,
+		"Export should be enabled once a GDD is loaded")
+
+func test_export_press_writes_md_sibling():
+	var json_path: String = _load_minimal()
+	# Default export target = sibling .md next to the loaded JSON.
+	_panel._on_export_pressed()
+	var expected_md: String = "%s.md" % json_path.get_basename()
+	assert_true(FileAccess.file_exists(expected_md),
+		"Export should write a .md sibling at %s; status: %s"
+			% [expected_md, _panel._status_label.text])
+
+func test_export_status_reports_byte_count_and_path():
+	var json_path: String = _load_minimal()
+	_panel._on_export_pressed()
+	assert_true("Exported" in _panel._status_label.text,
+		"status should announce success; got: %s" % _panel._status_label.text)
+	assert_true("bytes" in _panel._status_label.text,
+		"status should mention byte count; got: %s" % _panel._status_label.text)
+
+func test_export_persists_last_export_path():
+	var json_path: String = _load_minimal()
+	_panel._on_export_pressed()
+	# Settings should now have gdd.last_export_path set to the .md sibling.
+	var persisted: String = str(_orch.settings_manager.get_value(
+		"gdd.last_export_path", ""))
+	var expected_md: String = "%s.md" % json_path.get_basename()
+	assert_eq(persisted, expected_md,
+		"first export should persist its target as gdd.last_export_path")
+
+func test_export_uses_persisted_path_on_subsequent_clicks():
+	_load_minimal()
+	# Pre-set a custom export path; the next Export should write there
+	# instead of computing a sibling.
+	var custom: String = "%s/custom_export_%d.md" % [
+		_fixture_dir, randi() % 100000]
+	_orch.settings_manager.set_value("gdd.last_export_path", custom)
+	_panel._on_export_pressed()
+	assert_true(FileAccess.file_exists(custom),
+		"persisted path should win over the JSON sibling default")
+
+func test_export_without_loaded_gdd_does_not_crash():
+	# Defensive: even if someone surfaces export before a load
+	# (shouldn't happen via the button, but the handler must
+	# tolerate it).
+	_panel.show_dialog()
+	_panel._on_export_pressed()  # no crash; status label updates.
+	assert_true("load a GDD" in _panel._status_label.text,
+		"empty-GDD path should produce a guiding message; got: %s"
+			% _panel._status_label.text)
+
+
 # ---------- Cleanup helpers (copied from test_asset_manager) ----------
 
 func _rm_rf(absolute_dir: String) -> void:

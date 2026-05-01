@@ -460,6 +460,249 @@ func rollback(version: int) -> Dictionary:
 	return {"success": false, "error": "snapshot v%d not found" % version, "gdd": {}}
 
 
+# ---------- Markdown export (Phase 34 / ADR 034) ----------
+
+# Convert a GDD to a presentable Markdown string. Pure function — no
+# disk I/O, no validation, no mutation. Caller decides whether to
+# save, copy, or pipe the result.
+#
+# Section ordering matches the schema declaration order so the output
+# is deterministic across calls. Sections whose entity array is empty
+# or absent are skipped entirely (no "(none)" filler).
+#
+# Renders the same primary-fields-per-type table as gdd_edit_form's
+# spec (ADR 032), so what the user types in the form is what shows
+# up in the export. Un-rendered fields (stats, entry_points, dialogue
+# nodes, timestamps, etc.) are NOT emitted — they round-trip via the
+# JSON file but aren't part of the human-readable surface yet.
+func export_to_markdown(gdd: Dictionary) -> String:
+	var lines: Array = []
+	var meta: Dictionary = gdd.get("metadata", {}) if gdd.get("metadata", {}) is Dictionary else {}
+	var title: String = str(meta.get("title", "Game Design Document"))
+	lines.append("# %s" % title)
+	lines.append("")
+
+	# Optional metadata strip — only emit lines we actually have.
+	var meta_lines: Array = []
+	if meta.has("document_version") and not str(meta["document_version"]).is_empty():
+		meta_lines.append("_Version: %s_" % str(meta["document_version"]))
+	if meta.has("updated_at") and not str(meta["updated_at"]).is_empty():
+		meta_lines.append("_Last updated: %s_" % str(meta["updated_at"]))
+	if not meta_lines.is_empty():
+		for ml in meta_lines:
+			lines.append(ml)
+		lines.append("")
+
+	# Description / summary block. The schema doesn't formally name a
+	# top-level "summary" field — but if one is present (some seeds
+	# include it), surface it.
+	if gdd.has("summary") and not str(gdd["summary"]).is_empty():
+		lines.append(str(gdd["summary"]))
+		lines.append("")
+
+	# Section order: matches the schema declaration. Each helper
+	# returns its lines (or [] when the array is empty/absent).
+	var sections: Array = [
+		_md_mechanics_section(gdd),
+		_md_characters_section(gdd),
+		_md_scenes_section(gdd),
+		_md_tasks_section(gdd),
+		_md_dialogues_section(gdd),
+		_md_assets_section(gdd),
+	]
+	for sec in sections:
+		if (sec as Array).is_empty():
+			continue
+		lines.append("---")
+		lines.append("")
+		for l in sec:
+			lines.append(l)
+
+	return "\n".join(lines) + "\n"
+
+# Convert + write in one call. Pure-function callers can use
+# export_to_markdown directly; UI consumers want both steps + an
+# error surface, so this wraps it.
+#
+# Returns {success: bool, error?: String, path?: String, bytes?: int}.
+func save_markdown(gdd: Dictionary, path: String) -> Dictionary:
+	if path.is_empty():
+		return {"success": false, "error": "empty path"}
+	var text: String = export_to_markdown(gdd)
+	var dir: String = path.get_base_dir()
+	if not dir.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return {"success": false, "error": "cannot open for write: %s" % path}
+	f.store_string(text)
+	f.close()
+	return {"success": true, "path": path, "bytes": text.length()}
+
+
+# ---------- Markdown section helpers ----------
+
+func _md_mechanics_section(gdd: Dictionary) -> Array:
+	var items: Array = _items(gdd, "mechanics")
+	if items.is_empty():
+		return []
+	var out: Array = ["## Mechanics (%d)" % items.size(), ""]
+	for m in items:
+		if not (m is Dictionary):
+			continue
+		var id: String = str(m.get("id", "?"))
+		out.append("### %s" % id)
+		out.append("")
+		var desc: String = str(m.get("description", ""))
+		if not desc.is_empty():
+			out.append(desc)
+			out.append("")
+		var deps = m.get("dependencies", [])
+		if deps is Array and not (deps as Array).is_empty():
+			out.append("- **Depends on:** %s" % ", ".join(_stringify(deps)))
+			out.append("")
+	return out
+
+func _md_characters_section(gdd: Dictionary) -> Array:
+	var items: Array = _items(gdd, "characters")
+	if items.is_empty():
+		return []
+	var out: Array = ["## Characters (%d)" % items.size(), ""]
+	for c in items:
+		if not (c is Dictionary):
+			continue
+		var id: String = str(c.get("id", "?"))
+		var name: String = str(c.get("name", ""))
+		var role: String = str(c.get("role", ""))
+		var heading: String = id
+		if not name.is_empty():
+			heading = "%s — %s" % [id, name]
+		out.append("### %s" % heading)
+		out.append("")
+		if not role.is_empty():
+			out.append("- **Role:** %s" % role)
+		var asset_id: String = str(c.get("asset_id", ""))
+		if not asset_id.is_empty():
+			out.append("- **Asset:** %s" % asset_id)
+		out.append("")
+	return out
+
+func _md_scenes_section(gdd: Dictionary) -> Array:
+	var items: Array = _items(gdd, "scenes")
+	if items.is_empty():
+		return []
+	var out: Array = ["## Scenes (%d)" % items.size(), ""]
+	for s in items:
+		if not (s is Dictionary):
+			continue
+		var id: String = str(s.get("id", "?"))
+		var name: String = str(s.get("name", ""))
+		var heading: String = id
+		if not name.is_empty():
+			heading = "%s — %s" % [id, name]
+		out.append("### %s" % heading)
+		out.append("")
+		var related = s.get("related_asset_ids", [])
+		if related is Array and not (related as Array).is_empty():
+			out.append("- **Assets:** %s" % ", ".join(_stringify(related)))
+			out.append("")
+	return out
+
+func _md_tasks_section(gdd: Dictionary) -> Array:
+	var items: Array = _items(gdd, "tasks")
+	if items.is_empty():
+		return []
+	var out: Array = ["## Tasks (%d)" % items.size(), ""]
+	for t in items:
+		if not (t is Dictionary):
+			continue
+		var id: String = str(t.get("id", "?"))
+		var title: String = str(t.get("title", ""))
+		var heading: String = id
+		if not title.is_empty():
+			heading = "%s — %s" % [id, title]
+		out.append("### %s" % heading)
+		out.append("")
+		# Status / priority on a single italic line.
+		var meta_bits: Array = []
+		var status: String = str(t.get("status", ""))
+		if not status.is_empty():
+			meta_bits.append("status: %s" % status)
+		var prio: String = str(t.get("priority", ""))
+		if not prio.is_empty():
+			meta_bits.append("priority: %s" % prio)
+		if not meta_bits.is_empty():
+			out.append("_%s_" % " · ".join(meta_bits))
+			out.append("")
+		var desc: String = str(t.get("description", ""))
+		if not desc.is_empty():
+			out.append(desc)
+			out.append("")
+		var deps = t.get("dependencies", [])
+		if deps is Array and not (deps as Array).is_empty():
+			out.append("- **Depends on:** %s" % ", ".join(_stringify(deps)))
+		var blocked = t.get("blocked_by", [])
+		if blocked is Array and not (blocked as Array).is_empty():
+			out.append("- **Blocked by:** %s" % ", ".join(_stringify(blocked)))
+		out.append("")
+	return out
+
+func _md_dialogues_section(gdd: Dictionary) -> Array:
+	var items: Array = _items(gdd, "dialogues")
+	if items.is_empty():
+		return []
+	var out: Array = ["## Dialogues (%d)" % items.size(), ""]
+	for d in items:
+		if not (d is Dictionary):
+			continue
+		var id: String = str(d.get("id", "?"))
+		out.append("### %s" % id)
+		out.append("")
+		var char_id: String = str(d.get("character_id", ""))
+		if not char_id.is_empty():
+			out.append("- **Character:** %s" % char_id)
+		var nodes = d.get("nodes", [])
+		if nodes is Array:
+			out.append("- **Nodes:** %d" % (nodes as Array).size())
+		out.append("")
+	return out
+
+func _md_assets_section(gdd: Dictionary) -> Array:
+	var items: Array = _items(gdd, "assets")
+	if items.is_empty():
+		return []
+	var out: Array = ["## Assets (%d)" % items.size(), ""]
+	for a in items:
+		if not (a is Dictionary):
+			continue
+		var id: String = str(a.get("id", "?"))
+		var type: String = str(a.get("type", ""))
+		var heading: String = id
+		if not type.is_empty():
+			heading = "%s (%s)" % [id, type]
+		out.append("### %s" % heading)
+		out.append("")
+		var path: String = str(a.get("path", ""))
+		if not path.is_empty():
+			out.append("- **Path:** `%s`" % path)
+		var status: String = str(a.get("status", ""))
+		if not status.is_empty():
+			out.append("- **Status:** %s" % status)
+		out.append("")
+	return out
+
+# Map an Array of arbitrary values to an Array of strings via str().
+# Used for the joined "deps: a, b, c" lines so we don't pass raw
+# Variants into ", ".join.
+func _stringify(arr) -> Array:
+	var out: Array = []
+	if not (arr is Array):
+		return out
+	for v in (arr as Array):
+		out.append(str(v))
+	return out
+
+
 # ---------- EventBus plumbing (safe if no autoload) ----------
 
 func _post_event(event_name: String, args: Array) -> void:

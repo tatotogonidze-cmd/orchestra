@@ -67,6 +67,9 @@ var _header_label: Label
 var _path_input: LineEdit
 var _load_button: Button
 var _edit_button: Button
+# Phase 34 (ADR 034): Export → Markdown. Disabled until a GDD is
+# loaded; one-click writes a .md sibling next to the loaded JSON.
+var _export_button: Button
 var _status_label: Label
 # Phase 29 (ADR 029): "Auto-fix" affordance, visible only when the
 # currently-loaded GDD has dangling cross-references. One click runs
@@ -138,6 +141,11 @@ const DEFAULT_PATH: String = "user://gdd.json"
 # namespace so it doesn't collide with other subsystems.
 const SETTING_LAST_PATH: String = "gdd.last_path"
 
+# Phase 34 (ADR 034): persist the last successful export path so the
+# next Export click writes to the same .md by default. Same gdd
+# namespace.
+const SETTING_LAST_EXPORT_PATH: String = "gdd.last_export_path"
+
 # Tight params for the chat-edit dispatch. Low temperature so Claude
 # doesn't reinterpret existing fields creatively; high enough max_tokens
 # to fit a reasonably large GDD.
@@ -207,6 +215,17 @@ func _ready() -> void:
 	_edit_button.disabled = true
 	_edit_button.pressed.connect(_on_edit_pressed)
 	path_row.add_child(_edit_button)
+
+	# Export button (Phase 34 / ADR 034) — turn the loaded GDD into a
+	# Markdown sibling. Disabled until a GDD is loaded; same gate as
+	# Edit. Persists gdd.last_export_path so the next click defaults
+	# to the same location.
+	_export_button = Button.new()
+	_export_button.text = "Export .md"
+	_export_button.tooltip_text = "Write a Markdown export next to the loaded GDD JSON"
+	_export_button.disabled = true
+	_export_button.pressed.connect(_on_export_pressed)
+	path_row.add_child(_export_button)
 
 	# Status / error feedback. The Auto-fix button (Phase 29 / ADR
 	# 029) sits next to the label and surfaces only when the loaded
@@ -438,6 +457,38 @@ func _persist_last_path(path: String) -> void:
 		return
 	settings.call("set_value", SETTING_LAST_PATH, path)
 
+# Phase 34: read the persisted last-export path. Returns "" when
+# settings_manager is unavailable or unset.
+func _read_last_export_path() -> String:
+	if _orch == null or not ("settings_manager" in _orch):
+		return ""
+	var settings: Node = _orch.settings_manager
+	if settings == null or not settings.has_method("get_value"):
+		return ""
+	return str(settings.call("get_value", SETTING_LAST_EXPORT_PATH, ""))
+
+func _persist_last_export_path(path: String) -> void:
+	if _orch == null or not ("settings_manager" in _orch):
+		return
+	var settings: Node = _orch.settings_manager
+	if settings == null or not settings.has_method("set_value"):
+		return
+	settings.call("set_value", SETTING_LAST_EXPORT_PATH, path)
+
+# Decide where to write the .md. Order of preference:
+#   1. Persisted gdd.last_export_path — what the user picked last time.
+#   2. Sibling of the currently-loaded JSON (gdd.json → gdd.md).
+#   3. user://gdd.md as a final fallback.
+func _resolve_export_path() -> String:
+	var persisted: String = _read_last_export_path()
+	if not persisted.is_empty():
+		return persisted
+	if not _current_gdd_path.is_empty():
+		var base: String = _current_gdd_path.get_basename()
+		if not base.is_empty():
+			return "%s.md" % base
+	return "user://gdd.md"
+
 
 # ---------- Internals ----------
 
@@ -446,8 +497,11 @@ func _refresh() -> void:
 	_render_entities()
 	_render_snapshots()
 	_refresh_chat_edit_visibility()
-	# Edit button is enabled only when there's a GDD to edit.
+	# Edit + Export are enabled only when there's a GDD loaded. They
+	# share the same gate — there's nothing to edit or export without
+	# a loaded document.
 	_edit_button.disabled = _current_gdd.is_empty()
+	_export_button.disabled = _current_gdd.is_empty()
 
 # Chat-edit is only meaningful when (a) we have a GDD loaded so there's
 # something to edit, AND (b) the claude plugin is registered so we have
@@ -665,6 +719,29 @@ func _on_autofix_pressed() -> void:
 	_status_label.modulate = Color(0.5, 0.9, 0.5, 1.0)
 	_refresh_autofix_visibility()
 	_refresh()
+
+# Phase 34 (ADR 034): Export → Markdown. Resolves the target path,
+# delegates to gdd_manager.save_markdown, surfaces the outcome via
+# the status label, and persists the path so the next click defaults
+# to the same destination.
+func _on_export_pressed() -> void:
+	if _orch == null or _orch.gdd_manager == null:
+		_status_label.text = "no orchestrator bound (internal error)"
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	if _current_gdd.is_empty():
+		_status_label.text = "load a GDD before exporting"
+		_status_label.modulate = Color(1.0, 0.7, 0.2, 1.0)
+		return
+	var out_path: String = _resolve_export_path()
+	var r: Dictionary = _orch.gdd_manager.save_markdown(_current_gdd, out_path)
+	if not bool(r.get("success", false)):
+		_status_label.text = "Export failed: %s" % str(r.get("error", "unknown"))
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	_persist_last_export_path(out_path)
+	_status_label.text = "Exported %d bytes → %s" % [int(r.get("bytes", 0)), out_path]
+	_status_label.modulate = Color(0.5, 0.9, 0.5, 1.0)
 
 func _on_rollback_pressed(version: int) -> void:
 	if _orch == null or _orch.gdd_manager == null:

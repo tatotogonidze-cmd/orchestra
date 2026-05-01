@@ -410,6 +410,108 @@ func test_clean_dangling_handles_multiple_per_record():
 		"all dangling entries across all fields should be counted")
 
 
+# ---------- Markdown export (Phase 34 / ADR 034) ----------
+
+func test_export_to_markdown_returns_non_empty_string():
+	var md: String = gm.export_to_markdown(_minimal_valid_gdd())
+	assert_true(md.length() > 0,
+		"converter should always emit at least the heading")
+	assert_true(md.begins_with("#"),
+		"markdown should start with a heading; got: %s" % md.substr(0, 40))
+
+func test_export_includes_title_from_metadata():
+	var g: Dictionary = _minimal_valid_gdd()
+	(g["metadata"] as Dictionary)["title"] = "Hero's Journey"
+	var md: String = gm.export_to_markdown(g)
+	assert_true("# Hero's Journey" in md,
+		"title from metadata.title should be the heading; got: %s"
+			% md.substr(0, 80))
+
+func test_export_falls_back_to_default_title():
+	var md: String = gm.export_to_markdown(_minimal_valid_gdd())
+	assert_true("# Game Design Document" in md,
+		"absent metadata.title should produce default heading")
+
+func test_export_renders_mechanics_section():
+	var md: String = gm.export_to_markdown(_minimal_valid_gdd())
+	assert_true("## Mechanics" in md,
+		"mechanics section should be rendered when array non-empty")
+	assert_true("mech_combat" in md, "mechanic id should be in output")
+	assert_true("turn-based combat" in md, "mechanic description should be in output")
+
+func test_export_skips_empty_sections():
+	var md: String = gm.export_to_markdown(_minimal_valid_gdd())
+	# minimal fixture has empty assets/tasks and no scenes/chars/dialogues
+	assert_false("## Assets" in md,
+		"empty assets array should NOT produce a section")
+	assert_false("## Tasks" in md,
+		"empty tasks array should NOT produce a section")
+	assert_false("## Scenes" in md,
+		"absent scenes should NOT produce a section")
+
+func test_export_renders_full_xref_fixture():
+	var md: String = gm.export_to_markdown(_xref_gdd())
+	# Every entity type in the xref fixture should produce a section.
+	assert_true("## Mechanics" in md, "mechanics section expected")
+	assert_true("## Assets" in md, "assets section expected")
+	assert_true("## Tasks" in md, "tasks section expected")
+	assert_true("## Scenes" in md, "scenes section expected")
+	assert_true("## Characters" in md, "characters section expected")
+	assert_true("## Dialogues" in md, "dialogues section expected")
+
+func test_export_includes_character_name_and_role():
+	var g: Dictionary = _xref_gdd()
+	(g["characters"][0] as Dictionary)["role"] = "Protagonist"
+	var md: String = gm.export_to_markdown(g)
+	assert_true("char_hero — Hero" in md,
+		"character heading should combine id + name")
+	assert_true("Protagonist" in md,
+		"character role should be rendered")
+
+func test_export_renders_task_dependencies():
+	var md: String = gm.export_to_markdown(_xref_gdd())
+	# task_b in the xref fixture depends on task_a.
+	assert_true("**Depends on:** task_a" in md,
+		"task dependencies should be rendered as a bullet")
+
+func test_export_ends_with_newline():
+	var md: String = gm.export_to_markdown(_minimal_valid_gdd())
+	assert_true(md.ends_with("\n"),
+		"markdown output should end with a single newline for clean concat")
+
+func test_save_markdown_writes_to_disk():
+	var path: String = "user://_test_export_%d.md" % Time.get_ticks_msec()
+	var r: Dictionary = gm.save_markdown(_minimal_valid_gdd(), path)
+	assert_true(bool(r["success"]), "save_markdown should report success")
+	assert_eq(str(r["path"]), path, "result should echo path back")
+	assert_true(int(r["bytes"]) > 0, "result should report a positive byte count")
+	assert_true(FileAccess.file_exists(path),
+		"file should exist on disk after save_markdown")
+	# Read it back to confirm contents.
+	var f: FileAccess = FileAccess.open(path, FileAccess.READ)
+	var disk_text: String = f.get_as_text()
+	f.close()
+	assert_true(disk_text.begins_with("# "),
+		"disk content should be markdown starting with a heading")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_save_markdown_rejects_empty_path():
+	var r: Dictionary = gm.save_markdown(_minimal_valid_gdd(), "")
+	assert_false(bool(r["success"]),
+		"empty path should be rejected before any file work")
+
+func test_save_markdown_handles_validation_invalid_gdd():
+	# Markdown export is presentation, not persistence — even a
+	# structurally invalid GDD should produce best-effort output.
+	# (Contrast with save_gdd, which DOES validate.)
+	var bad: Dictionary = {"mechanics": [{"id": "mech_x", "description": "ok"}]}
+	var path: String = "user://_test_export_invalid_%d.md" % Time.get_ticks_msec()
+	var r: Dictionary = gm.save_markdown(bad, path)
+	assert_true(bool(r["success"]),
+		"save_markdown should not require the GDD to validate")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
 # ---------- Helpers ----------
 
 func _rmdir_recursive(path: String) -> void:

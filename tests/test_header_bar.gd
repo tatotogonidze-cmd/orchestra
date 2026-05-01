@@ -20,6 +20,7 @@ func test_header_builds_action_buttons():
 	assert_not_null(h._gdd_button, "_gdd_button should be built")
 	assert_not_null(h._scenes_button, "_scenes_button should be built")
 	assert_not_null(h._hud_button, "_hud_button should be built")
+	assert_not_null(h._settings_button, "_settings_button should be built")
 	assert_not_null(h._lock_button, "_lock_button should be built")
 
 func test_title_default_text():
@@ -57,3 +58,10 @@ func test_lock_button_emits_lock_requested():
 	h._emit_lock_requested()
 	assert_signal_emitted(h, "lock_requested",
 		"clicking Lock now should emit lock_requested")
+
+func test_settings_button_emits_settings_requested():
+	var h: Node = _make_header()
+	watch_signals(h)
+	h._emit_settings_requested()
+	assert_signal_emitted(h, "settings_requested",
+		"clicking Settings should emit settings_requested for main_shell to surface settings_panel")

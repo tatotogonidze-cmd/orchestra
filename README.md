@@ -76,11 +76,12 @@ orchestra/
 │       ├── asset_preview.gd  # Type-specific asset preview overlay
 │       ├── cost_footer.gd    # Persistent session-cost status bar (status only)
 │       ├── budget_hud.gd     # Detailed cost / breakdown / limit modal
-│       ├── header_bar.gd     # Top action bar — title + GDD/Scenes/HUD/Lock buttons
+│       ├── header_bar.gd     # Top action bar — title + GDD/Scenes/HUD/Settings/Lock buttons
 │       ├── param_form.gd     # Plugin-param schema → typed inputs
 │       ├── gdd_panel.gd      # GDD viewer + chat-edit + form-edit
 │       ├── gdd_edit_form.gd  # Form-based GDD editor sub-component
-│       └── scene_panel.gd    # Scene tester: list + preview + add/remove assets
+│       ├── scene_panel.gd    # Scene tester: list + preview + add/remove assets
+│       └── settings_panel.gd # Persisted-prefs editor — registry-driven typed inputs
 ├── plugins/
 │   ├── mock_3d_plugin.gd     # Stress test: 3D generator
 │   ├── mock_audio_plugin.gd  # Stress test: audio generator + RATE_LIMIT trigger
@@ -136,6 +137,8 @@ orchestra/
 - `docs/adrs/030-word-diff-and-auto-frame.md` — word-level diff stats + auto-frame model AABB
 - `docs/adrs/031-conversation-chat-edit.md` — multi-turn refinement of GDD via Claude
 - `docs/adrs/032-per-entity-form-fields.md` — per-type rendered fields in form-edit
+- `docs/adrs/033-settings-ui-overlay.md` — registry-driven settings editor
+- `docs/adrs/034-gdd-markdown-export.md` — GDD export to Markdown
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)
