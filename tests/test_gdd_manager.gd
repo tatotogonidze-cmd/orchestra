@@ -410,6 +410,44 @@ func test_clean_dangling_handles_multiple_per_record():
 		"all dangling entries across all fields should be counted")
 
 
+# ---------- Starter GDD (Phase 38 / ADR 038) ----------
+
+func test_create_starter_gdd_validates():
+	var seed: Dictionary = gm.create_starter_gdd()
+	var v: Dictionary = gm.validate(seed)
+	assert_true(bool(v["valid"]),
+		"starter GDD should be schema-valid out of the box; errors: %s"
+			% str(v["errors"]))
+
+func test_create_starter_gdd_has_required_root_fields():
+	var seed: Dictionary = gm.create_starter_gdd()
+	for key in ["schema_version", "game_title", "genres", "core_loop",
+				"mechanics", "assets", "tasks", "metadata"]:
+		assert_true(seed.has(key), "starter should have root field: %s" % key)
+
+func test_create_starter_gdd_has_one_example_mechanic():
+	var seed: Dictionary = gm.create_starter_gdd()
+	# Non-empty mechanics so the entities-rendered path on the panel
+	# gets exercised on the first open — not just empty arrays.
+	assert_eq(int((seed["mechanics"] as Array).size()), 1,
+		"starter should ship with one example mechanic")
+	assert_true(str(seed["mechanics"][0]["id"]).begins_with("mech_"),
+		"example mechanic should pass id-prefix validation")
+
+func test_create_starter_gdd_save_round_trip():
+	# A starter saved + loaded should match (modulo metadata
+	# touch-up — save_gdd stamps updated_at).
+	var path: String = "user://_test_starter_%d.json" % Time.get_ticks_msec()
+	var seed: Dictionary = gm.create_starter_gdd()
+	var save_r: Dictionary = gm.save_gdd(seed, path)
+	assert_true(bool(save_r["success"]),
+		"starter GDD should save without error; got: %s" % str(save_r))
+	var load_r: Dictionary = gm.load_gdd(path)
+	assert_true(bool(load_r["success"]))
+	assert_eq(load_r["gdd"]["game_title"], "Untitled Game")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
 # ---------- Snapshot diff (Phase 35 / ADR 035) ----------
 
 func test_diff_versions_success_returns_pretty_json():

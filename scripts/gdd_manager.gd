@@ -355,6 +355,50 @@ func _prune_scalar_ref(record: Dictionary, ref_field: String,
 	return 1
 
 
+# ---------- Starter GDD (Phase 38 / ADR 038) ----------
+
+# Return a valid, minimal-but-non-empty GDD skeleton. Used by the
+# gdd_panel's "Create starter" affordance to give first-launch users
+# something to look at without making them author the schema by hand.
+#
+# Pure function — no disk I/O, no validation gate. Caller decides
+# whether to save it. The returned dict is deliberately structured to
+# pass `validate()`:
+#   - all root-level required fields present
+#   - core_loop has goal/actions/rewards
+#   - mechanics has one example entry (so the entities-rendered case
+#     gets exercised on the very first open, not just empty arrays)
+#   - metadata has created_at + document_version
+#
+# What's NOT included: characters, scenes, dialogues. Those are
+# optional at the root level; leaving them out keeps the skeleton
+# minimal and lets the user add them when they're ready.
+func create_starter_gdd() -> Dictionary:
+	var now: String = Time.get_datetime_string_from_system(true)
+	return {
+		"schema_version": "1.0.0",
+		"game_title":     "Untitled Game",
+		"genres":         ["Action"],
+		"core_loop": {
+			"goal":    "Complete one mission",
+			"actions": ["explore", "fight", "collect"],
+			"rewards": ["xp", "loot"],
+		},
+		"mechanics": [
+			{
+				"id":          "mech_movement",
+				"description": "WASD-based player movement.",
+			},
+		],
+		"assets": [],
+		"tasks":  [],
+		"metadata": {
+			"document_version": "0.1.0",
+			"created_at":       now,
+		},
+	}
+
+
 # ---------- Persistence ----------
 
 # Named load_gdd to avoid shadowing built-in global load().
@@ -422,32 +466,113 @@ func _next_snapshot_version() -> int:
 		return 1
 	return int(existing[-1]["version"]) + 1
 
-# Returns [{version: int, path: String}] sorted ascending.
+# Returns [{version: int, path: String, annotation: String}] sorted ascending.
+# Phase 39 (ADR 039) added the annotation field — empty string when no
+# user-typed note exists for that version. Annotations live in a sidecar
+# JSON keyed by version (not in the snapshot file itself; the snapshot is
+# a verbatim GDD copy and shouldn't grow non-GDD fields).
 func list_snapshots() -> Array:
 	var result: Array = []
 	var dir: DirAccess = DirAccess.open(snapshot_dir)
 	if dir == null:
 		return result
+	var annotations: Dictionary = _load_annotations()
 	dir.list_dir_begin()
 	var fname: String = dir.get_next()
 	while fname != "":
 		if not dir.current_is_dir() and fname.begins_with("gdd_v") and fname.ends_with(".json"):
 			var v_str: String = fname.trim_prefix("gdd_v").trim_suffix(".json")
 			if v_str.is_valid_int():
-				result.append({"version": int(v_str), "path": "%s/%s" % [snapshot_dir, fname]})
+				var v: int = int(v_str)
+				result.append({
+					"version":    v,
+					"path":       "%s/%s" % [snapshot_dir, fname],
+					"annotation": str(annotations.get(str(v), "")),
+				})
 		fname = dir.get_next()
 	dir.list_dir_end()
 	result.sort_custom(func(a, b): return int(a["version"]) < int(b["version"]))
 	return result
+
+# ---------- Snapshot annotations (Phase 39 / ADR 039) ----------
+
+# Per-snapshot user-typed note ("before stealth refactor", etc).
+# Stored as a sidecar JSON next to the snapshot directory, keyed by
+# version number. Pure functions: caller drives reads + writes; UI
+# decides when to surface them.
+#
+# Storage shape (annotations.json):
+#   {"1": "first cut", "3": "before stealth refactor", ...}
+#
+# Empty string is treated as "no annotation" — set with "" to clear.
+
+const _ANNOTATIONS_FILE: String = "annotations.json"
+
+func get_snapshot_annotation(version: int) -> String:
+	var annotations: Dictionary = _load_annotations()
+	return str(annotations.get(str(version), ""))
+
+func set_snapshot_annotation(version: int, note: String) -> bool:
+	var annotations: Dictionary = _load_annotations()
+	var trimmed: String = note.strip_edges()
+	if trimmed.is_empty():
+		# Empty string ⇒ clear the annotation.
+		annotations.erase(str(version))
+	else:
+		annotations[str(version)] = trimmed
+	return _save_annotations(annotations)
+
+func _annotations_path() -> String:
+	return "%s/%s" % [snapshot_dir, _ANNOTATIONS_FILE]
+
+func _load_annotations() -> Dictionary:
+	var path: String = _annotations_path()
+	if not FileAccess.file_exists(path):
+		return {}
+	var f: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	var content: String = f.get_as_text()
+	f.close()
+	var parser: JSON = JSON.new()
+	if parser.parse(content) != OK:
+		push_warning("gdd_manager: annotations parse failed at %s: %s"
+			% [path, parser.get_error_message()])
+		return {}
+	var data: Variant = parser.data
+	if not (data is Dictionary):
+		return {}
+	return data as Dictionary
+
+func _save_annotations(annotations: Dictionary) -> bool:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(snapshot_dir))
+	var f: FileAccess = FileAccess.open(_annotations_path(), FileAccess.WRITE)
+	if f == null:
+		push_warning("gdd_manager: cannot write annotations to %s" % _annotations_path())
+		return false
+	f.store_string(JSON.stringify(annotations, "  "))
+	f.close()
+	return true
+
 
 func _prune_snapshots() -> void:
 	var snaps: Array = list_snapshots()
 	var excess: int = snaps.size() - MAX_SNAPSHOTS
 	if excess <= 0:
 		return
+	# Phase 39: also drop annotations for pruned versions so the sidecar
+	# doesn't accumulate orphaned notes.
+	var annotations: Dictionary = _load_annotations()
+	var annotations_changed: bool = false
 	for i in range(excess):
 		var abs_path: String = ProjectSettings.globalize_path(snaps[i]["path"])
 		DirAccess.remove_absolute(abs_path)
+		var v_key: String = str(int(snaps[i]["version"]))
+		if annotations.has(v_key):
+			annotations.erase(v_key)
+			annotations_changed = true
+	if annotations_changed:
+		_save_annotations(annotations)
 
 # Diff two snapshot versions (Phase 35 / ADR 035). Returns
 # pretty-printed JSON strings for both versions, ready for the

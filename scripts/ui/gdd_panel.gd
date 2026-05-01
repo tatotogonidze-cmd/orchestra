@@ -70,6 +70,11 @@ var _edit_button: Button
 # Phase 34 (ADR 034): Export → Markdown. Disabled until a GDD is
 # loaded; one-click writes a .md sibling next to the loaded JSON.
 var _export_button: Button
+# Phase 38 (ADR 038): Create-starter affordance. Visible ONLY when
+# no GDD is loaded — gives first-launch users a one-click way to
+# author a valid GDD at the typed path. Hidden as soon as a GDD
+# is loaded.
+var _create_starter_button: Button
 var _status_label: Label
 # Phase 29 (ADR 029): "Auto-fix" affordance, visible only when the
 # currently-loaded GDD has dangling cross-references. One click runs
@@ -237,6 +242,15 @@ func _ready() -> void:
 	_export_button.disabled = true
 	_export_button.pressed.connect(_on_export_pressed)
 	path_row.add_child(_export_button)
+
+	# Phase 38 (ADR 038): Create-starter button. Inverse visibility from
+	# the others — appears ONLY when there's nothing loaded. Saves a
+	# minimal valid GDD to the typed path and triggers a load.
+	_create_starter_button = Button.new()
+	_create_starter_button.text = "Create starter"
+	_create_starter_button.tooltip_text = "Save a minimal valid GDD at the typed path so you have something to start with"
+	_create_starter_button.pressed.connect(_on_create_starter_pressed)
+	path_row.add_child(_create_starter_button)
 
 	# Status / error feedback. The Auto-fix button (Phase 29 / ADR
 	# 029) sits next to the label and surfaces only when the loaded
@@ -573,6 +587,10 @@ func _refresh() -> void:
 	# a loaded document.
 	_edit_button.disabled = _current_gdd.is_empty()
 	_export_button.disabled = _current_gdd.is_empty()
+	# Phase 38: Create-starter button has the inverse gate — visible
+	# only when there's nothing loaded. The user can either Load an
+	# existing GDD OR Create a starter at the typed path.
+	_create_starter_button.visible = _current_gdd.is_empty()
 
 # Chat-edit is only meaningful when (a) we have a GDD loaded so there's
 # something to edit, AND (b) the claude plugin is registered so we have
@@ -641,6 +659,13 @@ func _render_entities() -> void:
 		_entities_container.remove_child(child)
 		child.free()
 	if _current_gdd.is_empty():
+		# Phase 38 (ADR 038): empty-state hint instead of silent
+		# emptiness. Tells the user what their next action is.
+		var hint := Label.new()
+		hint.text = "(no GDD loaded — Load an existing one above, or click Create starter to scaffold a fresh document)"
+		hint.modulate = Color(0.6, 0.6, 0.6, 1.0)
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_entities_container.add_child(hint)
 		return
 	for key in _ENTITY_KEYS:
 		var arr = _current_gdd.get(key, [])
@@ -665,9 +690,14 @@ func _render_snapshots() -> void:
 		return
 	var snapshots: Array = _orch.gdd_manager.list_snapshots()
 	if snapshots.is_empty():
+		# Phase 38: distinguish "no GDD loaded" from "GDD loaded but
+		# never saved" in the snapshot empty hint.
 		var empty := Label.new()
-		empty.text = "(no snapshots)"
+		empty.text = ("(no snapshots — every successful save creates one automatically)"
+			if not _current_gdd.is_empty()
+			else "(no snapshots)")
 		empty.modulate = Color(0.5, 0.5, 0.5, 1.0)
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_snapshots_container.add_child(empty)
 		return
 	# Sort by version descending — newest first.
@@ -839,6 +869,37 @@ func _on_rollback_pressed(version: int) -> void:
 	else:
 		_status_label.text = "Rollback failed: %s" % str(result.get("error", "unknown"))
 		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+
+# Phase 38 (ADR 038): Create-starter button handler. Asks gdd_manager
+# for a minimal valid GDD, writes it to the typed path, and triggers
+# a load so the panel populates. Errors surface via the status label
+# the same way load / save do.
+func _on_create_starter_pressed() -> void:
+	if _orch == null or _orch.gdd_manager == null:
+		_status_label.text = "no orchestrator bound (internal error)"
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	var path: String = _path_input.text.strip_edges()
+	if path.is_empty():
+		_status_label.text = "type a path before creating a starter"
+		_status_label.modulate = Color(1.0, 0.7, 0.2, 1.0)
+		return
+	# Don't clobber an existing file — the user may have typed the
+	# wrong path. They can delete it manually or pick a different
+	# path if they really want a fresh skeleton.
+	if FileAccess.file_exists(path):
+		_status_label.text = "Path already has a file — Load it instead, or pick another path"
+		_status_label.modulate = Color(1.0, 0.7, 0.2, 1.0)
+		return
+	var gdd: Dictionary = _orch.gdd_manager.create_starter_gdd()
+	var save: Dictionary = _orch.gdd_manager.save_gdd(gdd, path)
+	if not bool(save.get("success", false)):
+		_status_label.text = "Starter save failed: %s" % str(save.get("error", "unknown"))
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	# Trigger a normal load so all the downstream wiring (status
+	# label, persisted-path setting, refresh) runs uniformly.
+	_on_load_pressed()
 
 # Phase 35 (ADR 035): Compare a snapshot against the currently-loaded
 # GDD. Asks gdd_manager to load the snapshot and pretty-print both

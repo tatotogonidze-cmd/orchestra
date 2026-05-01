@@ -900,6 +900,70 @@ func test_edit_save_with_invalid_gdd_stays_in_edit_mode():
 		"failed save should leave the user in edit mode to retry")
 
 
+# ---------- Onboarding empty-state polish (Phase 38 / ADR 038) ----------
+
+func test_create_starter_button_visible_when_no_gdd_loaded():
+	_panel.show_dialog()
+	# No GDD loaded yet — button should be visible (inverse of Edit / Export).
+	assert_true(_panel._create_starter_button.visible,
+		"Create-starter should surface when there's no GDD loaded")
+
+func test_create_starter_button_hidden_after_load():
+	_load_minimal()
+	assert_false(_panel._create_starter_button.visible,
+		"Create-starter should hide once a GDD is loaded")
+
+func test_create_starter_writes_starter_gdd_to_typed_path():
+	_panel.show_dialog()
+	var path: String = "%s/starter_%d.json" % [_fixture_dir, randi() % 100000]
+	_panel._path_input.text = path
+	_panel._on_create_starter_pressed()
+	assert_true(FileAccess.file_exists(path),
+		"create-starter should write a valid GDD at the typed path")
+	# Loaded into _current_gdd by the auto-load step.
+	assert_false(_panel._current_gdd.is_empty(),
+		"after create-starter, the panel should have the starter loaded")
+
+func test_create_starter_refuses_to_clobber_existing_file():
+	_panel.show_dialog()
+	# Pre-write any file at the target path so create-starter sees it.
+	var path: String = "%s/preexists_%d.json" % [_fixture_dir, randi() % 100000]
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("{}")
+	f.close()
+	_panel._path_input.text = path
+	_panel._on_create_starter_pressed()
+	# File was unchanged (we don't overwrite). Status surfaces a guiding message.
+	assert_true("already" in _panel._status_label.text,
+		"refusal should be surfaced; got: %s" % _panel._status_label.text)
+	assert_true(_panel._current_gdd.is_empty(),
+		"refusal path should not load the pre-existing file")
+
+func test_create_starter_with_empty_path_surfaces_warning():
+	_panel.show_dialog()
+	_panel._path_input.text = ""
+	_panel._on_create_starter_pressed()
+	assert_true("path" in _panel._status_label.text,
+		"empty-path case should remind user to type a path; got: %s"
+			% _panel._status_label.text)
+
+func test_entities_empty_state_hint_visible_without_gdd():
+	_panel.show_dialog()
+	# entities_container should have exactly one child — the hint label.
+	assert_eq(_panel._entities_container.get_child_count(), 1,
+		"entities container should hold a single hint label without a GDD")
+	var hint: Node = _panel._entities_container.get_child(0)
+	assert_true(hint is Label,
+		"entities empty state should be a Label, not silent emptiness")
+
+func test_entities_hint_replaced_by_rows_after_load():
+	_load_minimal()
+	# After load the container has one row per entity type (6).
+	assert_eq(_panel._entities_container.get_child_count(),
+		_panel._ENTITY_KEYS.size(),
+		"after load, entity rows should replace the hint")
+
+
 # ---------- Snapshot Diff Viewer (Phase 35 / ADR 035) ----------
 
 func _make_two_snapshots() -> String:

@@ -85,6 +85,7 @@ orchestra/
 ├── plugins/
 │   ├── mock_3d_plugin.gd     # Stress test: 3D generator
 │   ├── mock_audio_plugin.gd  # Stress test: audio generator + RATE_LIMIT trigger
+│   ├── mock_image_plugin.gd  # Stress test: image generator (writes synthetic PNGs) + RATE_LIMIT trigger
 │   ├── tripo_plugin.gd       # Real: text-to-3D
 │   ├── elevenlabs_plugin.gd  # Real: text-to-speech
 │   ├── claude_plugin.gd      # Real: Anthropic Messages API
@@ -142,6 +143,8 @@ orchestra/
 - `docs/adrs/034-gdd-markdown-export.md` — GDD export to Markdown
 - `docs/adrs/035-snapshot-diff-viewer.md` — read-only snapshot vs current diff
 - `docs/adrs/036-openai-image-plugin.md` — real text-to-image via OpenAI
+- `docs/adrs/037-mock-image-plugin.md` — synthetic PNG mock for retry + preview coverage
+- `docs/adrs/038-onboarding-empty-state-polish.md` — first-launch hints + starter-GDD seed
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

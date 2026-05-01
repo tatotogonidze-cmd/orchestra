@@ -105,7 +105,15 @@ func refresh() -> void:
 		filter["asset_type"] = _current_filter
 	var assets: Array = _orch.asset_manager.list_assets(filter)
 	if assets.is_empty():
-		_list.add_item("(no assets)")
+		# Phase 38 (ADR 038): actionable empty-state hint instead of a
+		# silent "(no assets)". Differentiates "you've filtered them
+		# out" from "library is empty" so the user knows what to do.
+		var hint: String = ""
+		if _current_filter == "all":
+			hint = "(no assets yet — generate something to populate your library)"
+		else:
+			hint = "(no %s assets — try a different filter or generate one)" % _current_filter
+		_list.add_item(hint)
 		_list.set_item_disabled(0, true)
 		return
 	# Newest first — sort by created_at descending. AssetManager returns

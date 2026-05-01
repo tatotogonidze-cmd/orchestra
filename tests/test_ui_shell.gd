@@ -106,6 +106,39 @@ func test_plugin_panel_marks_registered_plugin_active():
 			break
 	assert_true(found, "[active] claude row not found")
 
+# Phase 38 (ADR 038): empty-state hint surfacing.
+
+func test_plugin_panel_empty_hint_visible_with_zero_registered():
+	var orch: Node = _make_orch()
+	var panel: Node = PluginPanelScript.new()
+	add_child_autofree(panel)
+	panel.bind(orch)
+	# No plugin registered with this orchestrator — hint should surface.
+	assert_true(panel._empty_hint.visible,
+		"empty hint should surface when zero plugins are registered")
+
+func test_plugin_panel_empty_hint_hidden_after_registration():
+	var orch: Node = _make_orch()
+	orch.register_plugin_with_config("claude", {"api_key": "sk-ant-test"})
+	var panel: Node = PluginPanelScript.new()
+	add_child_autofree(panel)
+	panel.bind(orch)
+	assert_false(panel._empty_hint.visible,
+		"hint should disappear once at least one plugin is registered")
+
+func test_asset_gallery_empty_state_says_generate_to_populate():
+	var orch: Node = _make_orch()
+	var gallery: Node = AssetGalleryScript.new()
+	add_child_autofree(gallery)
+	gallery.bind(orch)
+	# Single placeholder row with the actionable hint.
+	var list: ItemList = gallery._list
+	assert_eq(list.item_count, 1,
+		"empty gallery should hold exactly the placeholder row")
+	assert_true("generate" in list.get_item_text(0),
+		"empty hint should mention generating; got: %s" % list.get_item_text(0))
+
+
 func test_plugin_panel_refreshes_on_eventbus_signal():
 	# Regression test for: bind first, then register. The panel should
 	# auto-refresh when EventBus.plugin_enabled fires — at the time the

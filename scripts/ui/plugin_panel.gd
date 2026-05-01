@@ -26,6 +26,9 @@ signal manage_credentials_requested()
 var _orch: Node = null
 var _list: ItemList
 var _manage_button: Button
+# Phase 38 (ADR 038): empty-state hint pointing first-launch users at
+# the credential editor. Shown only when ZERO plugins are registered.
+var _empty_hint: Label
 
 
 func _ready() -> void:
@@ -40,6 +43,13 @@ func _ready() -> void:
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_list.custom_minimum_size = Vector2(0, 200)
 	add_child(_list)
+
+	_empty_hint = Label.new()
+	_empty_hint.text = "No plugins registered yet. Click 'Manage credentials…' below to configure API keys, or set OPENAI_API_KEY / ANTHROPIC_API_KEY / etc. as environment variables before launching."
+	_empty_hint.modulate = Color(1.0, 0.85, 0.5, 1.0)
+	_empty_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_empty_hint.visible = false
+	add_child(_empty_hint)
 
 	_manage_button = Button.new()
 	_manage_button.text = "Manage credentials…"
@@ -70,15 +80,26 @@ func refresh() -> void:
 	if _orch == null:
 		_list.add_item("(no orchestrator bound)")
 		_list.set_item_disabled(0, true)
+		_empty_hint.visible = false
 		return
 	var known: Array = PluginRegistryScript.names()
 	if known.is_empty():
 		_list.add_item("(no plugins in registry)")
 		_list.set_item_disabled(0, true)
+		_empty_hint.visible = false
 		return
+	# Phase 38: count how many plugins are actually registered while
+	# building the rows. The empty-state hint surfaces only when zero
+	# of the registry's plugins have credentials.
+	var registered_count: int = 0
+	var pm: Node = _orch.plugin_manager
 	for plugin_name in known:
 		var label: String = _format_row(str(plugin_name))
 		_list.add_item(label)
+		if pm != null and pm.has_method("is_plugin_registered") \
+				and bool(pm.call("is_plugin_registered", str(plugin_name))):
+			registered_count += 1
+	_empty_hint.visible = registered_count == 0
 
 
 # ---------- Internals ----------
