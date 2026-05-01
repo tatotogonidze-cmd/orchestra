@@ -134,6 +134,8 @@ orchestra/
 - `docs/adrs/028-ux-polish-pair.md` — reset-to-default per param + scene picker
 - `docs/adrs/029-auto-fix-and-typed-probe.md` — bulk auto-fix dangling refs + typed-key Test
 - `docs/adrs/030-word-diff-and-auto-frame.md` — word-level diff stats + auto-frame model AABB
+- `docs/adrs/031-conversation-chat-edit.md` — multi-turn refinement of GDD via Claude
+- `docs/adrs/032-per-entity-form-fields.md` — per-type rendered fields in form-edit
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

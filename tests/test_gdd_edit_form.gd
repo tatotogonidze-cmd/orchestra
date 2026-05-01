@@ -114,8 +114,10 @@ func test_get_gdd_picks_up_user_edits():
 	# Mutate an entity row.
 	var mechanics_section: Dictionary = f._entity_sections["mechanics"]
 	var row_entry: Dictionary = (mechanics_section["rows"] as Array)[0]
-	(row_entry["id"] as LineEdit).text = "mech_battle"
-	(row_entry["desc"] as LineEdit).text = "fast battle"
+	# Phase 32: row inputs live under "inputs" keyed by field name
+	# so per-type fields all reach through the same accessor.
+	(row_entry["inputs"]["id"] as LineEdit).text = "mech_battle"
+	(row_entry["inputs"]["description"] as LineEdit).text = "fast battle"
 	var out: Dictionary = f.get_gdd()
 	assert_eq(out["game_title"], "Renamed")
 	assert_eq((out["core_loop"] as Dictionary)["goal"], "different goal")
@@ -184,6 +186,140 @@ func test_cancel_emits_signal_without_payload():
 
 
 # ---------- Re-set replaces previous content ----------
+
+# ---------- Per-entity custom fields (Phase 32 / ADR 032) ----------
+
+func test_character_row_renders_id_name_role():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [], "assets": [], "tasks": [],
+		"characters": [{
+			"id": "char_hero",
+			"name": "Mira",
+			"role": "protagonist",
+			"stats": {"hp": 100},  # un-rendered; should pass through
+		}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	var section: Dictionary = f._entity_sections["characters"]
+	var row: Dictionary = (section["rows"] as Array)[0]
+	var inputs: Dictionary = row["inputs"]
+	# Phase 32: id, name, role rendered as separate LineEdits.
+	assert_true(inputs.has("id"))
+	assert_true(inputs.has("name"))
+	assert_true(inputs.has("role"))
+	assert_eq((inputs["id"] as LineEdit).text, "char_hero")
+	assert_eq((inputs["name"] as LineEdit).text, "Mira")
+	assert_eq((inputs["role"] as LineEdit).text, "protagonist")
+
+func test_scene_row_renders_id_and_name():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [], "assets": [], "tasks": [],
+		"scenes": [{"id": "scene_intro", "name": "Opening Scene"}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	var section: Dictionary = f._entity_sections["scenes"]
+	var row: Dictionary = (section["rows"] as Array)[0]
+	assert_eq((row["inputs"]["id"] as LineEdit).text, "scene_intro")
+	assert_eq((row["inputs"]["name"] as LineEdit).text, "Opening Scene")
+	# Phase 32: scenes don't have a "description" field in spec.
+	assert_false(row["inputs"].has("description"),
+		"scene rows shouldn't render a description field (not in spec)")
+
+func test_task_row_renders_id_title_description():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [], "assets": [],
+		"tasks": [{
+			"id": "task_intro",
+			"title": "Tutorial Quest",
+			"description": "Walk the player through the basics",
+			"status": "Ready",
+			"created_at": "2026-04-25T00:00:00Z",
+		}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	var section: Dictionary = f._entity_sections["tasks"]
+	var row: Dictionary = (section["rows"] as Array)[0]
+	assert_eq((row["inputs"]["title"] as LineEdit).text, "Tutorial Quest")
+	assert_eq((row["inputs"]["description"] as LineEdit).text,
+		"Walk the player through the basics")
+
+func test_get_gdd_round_trips_per_type_fields():
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [], "assets": [], "tasks": [],
+		"characters": [{"id": "char_a", "name": "Alice", "role": "guide"}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	# Mutate fields as the user would.
+	var section: Dictionary = f._entity_sections["characters"]
+	var row: Dictionary = (section["rows"] as Array)[0]
+	(row["inputs"]["name"] as LineEdit).text = "Bob"
+	(row["inputs"]["role"] as LineEdit).text = "rival"
+	var out: Dictionary = f.get_gdd()
+	var c: Dictionary = (out["characters"] as Array)[0]
+	assert_eq(c["id"], "char_a")
+	assert_eq(c["name"], "Bob")
+	assert_eq(c["role"], "rival")
+
+func test_get_gdd_preserves_unrendered_per_type_fields():
+	# character.stats / asset.tags / scene.entry_points etc.
+	# These aren't in the spec — they pass through via the buffer.
+	var f: Node = _make_form()
+	f.set_gdd({
+		"schema_version": "1.0.0",
+		"game_title": "T",
+		"genres": ["X"],
+		"core_loop": {"goal": "g", "actions": [], "rewards": []},
+		"mechanics": [], "assets": [], "tasks": [],
+		"characters": [{
+			"id": "char_a",
+			"name": "Hero",
+			"stats": {"hp": 100, "mp": 50},
+		}],
+		"metadata": {"document_version": "0.1.0", "created_at": "2026-04-25T00:00:00Z"},
+	})
+	# User edits the name; stats should survive.
+	var section: Dictionary = f._entity_sections["characters"]
+	var row: Dictionary = (section["rows"] as Array)[0]
+	(row["inputs"]["name"] as LineEdit).text = "Hero (rev)"
+	var out: Dictionary = f.get_gdd()
+	var c: Dictionary = (out["characters"] as Array)[0]
+	assert_eq(c["name"], "Hero (rev)")
+	# stats came from the buffer, untouched.
+	assert_eq(int((c["stats"] as Dictionary)["hp"]), 100)
+	assert_eq(int((c["stats"] as Dictionary)["mp"]), 50)
+
+func test_blank_row_still_skipped_with_per_type_spec():
+	# An empty per-type row (all LineEdits blank) should still be
+	# skipped on read — same behaviour as Phase 18.
+	var f: Node = _make_form()
+	f.set_gdd(_sample_gdd())
+	# Add a fresh empty character row.
+	f._add_entity_row("characters", {})
+	var out: Dictionary = f.get_gdd()
+	# Empty row not written to the array.
+	assert_eq((out["characters"] as Array).size(), 0,
+		"empty per-type rows should be skipped, same as Phase 18")
+
 
 func test_set_gdd_replaces_previous_state():
 	var f: Node = _make_form()

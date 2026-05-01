@@ -122,6 +122,13 @@ var _chat_edit_task_id: String = ""
 # Proposed GDD coming back from Claude. Empty when we're not in PREVIEW.
 var _pending_gdd: Dictionary = {}
 
+# Phase 31 (ADR 031): conversation-mode chat-edit. Tracks how many
+# turns have been dispatched in the current refinement session. 0 =
+# no edit in flight. 1+ = user submitted at least once. Reset on
+# Approve / Reject. Surfaced in the status banner ("turn 2: editing…")
+# so the user can see they're in a refinement loop.
+var _conversation_turn: int = 0
+
 # Path the user typed. Default points at the conventional location;
 # users can override before clicking Load.
 const DEFAULT_PATH: String = "user://gdd.json"
@@ -452,15 +459,18 @@ func _refresh_chat_edit_visibility() -> void:
 	var has_gdd: bool = not _current_gdd.is_empty()
 	var has_claude: bool = _is_claude_registered()
 	_chat_edit_section.visible = has_gdd and has_claude
-	# Submit is disabled mid-flight or while a preview is pending —
-	# the user has to resolve the current edit before starting another.
+	# Phase 31 (ADR 031): Submit is disabled ONLY mid-flight. PREVIEW
+	# state (has_pending) keeps Submit enabled so the user can refine
+	# the proposal in subsequent turns instead of having to Approve /
+	# Reject first.
 	var in_flight: bool = not _chat_edit_task_id.is_empty()
 	var has_pending: bool = not _pending_gdd.is_empty()
-	_chat_edit_submit.disabled = in_flight or has_pending
-	if has_pending:
-		_chat_edit_status.text = "review the proposal below — Approve or Reject to continue"
+	_chat_edit_submit.disabled = in_flight
+	if has_pending and not in_flight:
+		_chat_edit_status.text = "preview shown — type a refinement and Submit, or Approve / Reject"
 	elif in_flight:
-		_chat_edit_status.text = "editing… task %s" % _chat_edit_task_id
+		_chat_edit_status.text = "turn %d: editing… task %s" % [
+			_conversation_turn, _chat_edit_task_id]
 	elif has_gdd and not has_claude:
 		# Section is hidden, but if it ever becomes visible the status
 		# is still meaningful.
@@ -717,7 +727,12 @@ func _on_chat_edit_submit_pressed() -> void:
 		return
 
 	var schema: Dictionary = _orch.gdd_manager.get_schema()
-	var prompt: String = _compose_chat_edit_prompt(_current_gdd, schema, instruction)
+	# Phase 31 (ADR 031): refinement uses the LATEST proposed GDD as
+	# the basis when we're in PREVIEW state — that's the cumulative
+	# state the user is iterating on. First turn falls back to the
+	# saved baseline.
+	var basis: Dictionary = _resolve_chat_edit_basis()
+	var prompt: String = _compose_chat_edit_prompt(basis, schema, instruction)
 
 	var tid: String = str(_orch.generate("claude", prompt, _CHAT_EDIT_PARAMS))
 	if tid.is_empty():
@@ -725,7 +740,8 @@ func _on_chat_edit_submit_pressed() -> void:
 		_chat_edit_status.modulate = Color(1.0, 0.45, 0.45, 1.0)
 		return
 	_chat_edit_task_id = tid
-	_chat_edit_status.text = "editing… task %s" % tid
+	_conversation_turn += 1
+	_chat_edit_status.text = "turn %d: editing… task %s" % [_conversation_turn, tid]
 	_chat_edit_status.modulate = Color(0.85, 0.85, 0.85, 1.0)
 	_chat_edit_submit.disabled = true
 	emit_signal("chat_edit_dispatched", tid)
@@ -1075,11 +1091,27 @@ func _on_reject_pressed() -> void:
 
 func _clear_pending_edit() -> void:
 	_pending_gdd = {}
+	# Phase 31: any time we drop the pending preview (Reject, fresh
+	# Load, Edit-mode entry, successful Approve) we also end the
+	# conversation. Next Submit starts at turn 1 from the saved baseline.
+	_conversation_turn = 0
 	if _diff_section != null:
 		_diff_section.visible = false
 		_diff_before_view.text = ""
 		_diff_after_view.text = ""
 		_diff_summary_label.text = ""
+
+# Phase 31: resolve the basis for the next chat-edit dispatch.
+# In PREVIEW state (_pending_gdd populated) we iterate on the
+# latest proposal — that's the user's cumulative state. Otherwise
+# we start fresh from the saved baseline.
+#
+# Public-ish (no leading-underscore in spirit) for tests; the
+# leading underscore indicates "internal helper" by convention.
+func _resolve_chat_edit_basis() -> Dictionary:
+	if not _pending_gdd.is_empty():
+		return _pending_gdd
+	return _current_gdd
 
 
 # ---------- Form-based edit handlers (Phase 18) ----------

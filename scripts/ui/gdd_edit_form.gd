@@ -43,6 +43,48 @@ const _ENTITY_TYPES: Array = [
 	"mechanics", "assets", "tasks", "scenes", "characters", "dialogues",
 ]
 
+# Phase 32 (ADR 032): per-entity field rendering. Each entity type
+# declares the fields it wants in the row, in order from left to
+# right. `expand: true` makes the LineEdit take the remaining row
+# width (used for description-style free-form text). `min_width`
+# pins the column width for fixed-shape fields (id, type tags,
+# enum-ish values).
+#
+# Fields NOT listed here pass through untouched via the buffer-
+# preserves-extras pattern from Phase 18 — character.stats,
+# scene.entry_points, dialogue.nodes etc all survive a save round-
+# trip without rendering. Adding them later means appending to the
+# spec; no read-side change needed.
+const _ENTITY_FIELD_SPEC: Dictionary = {
+	"mechanics": [
+		{"key": "id",          "min_width": 150, "expand": false},
+		{"key": "description", "min_width": 0,   "expand": true},
+	],
+	"assets": [
+		{"key": "id",   "min_width": 150, "expand": false},
+		{"key": "type", "min_width": 100, "expand": false},
+		{"key": "path", "min_width": 0,   "expand": true},
+	],
+	"tasks": [
+		{"key": "id",          "min_width": 130, "expand": false},
+		{"key": "title",       "min_width": 150, "expand": false},
+		{"key": "description", "min_width": 0,   "expand": true},
+	],
+	"scenes": [
+		{"key": "id",   "min_width": 130, "expand": false},
+		{"key": "name", "min_width": 0,   "expand": true},
+	],
+	"characters": [
+		{"key": "id",   "min_width": 130, "expand": false},
+		{"key": "name", "min_width": 130, "expand": false},
+		{"key": "role", "min_width": 0,   "expand": true},
+	],
+	"dialogues": [
+		{"key": "id",           "min_width": 130, "expand": false},
+		{"key": "character_id", "min_width": 0,   "expand": true},
+	],
+}
+
 signal saved(gdd: Dictionary)
 signal cancelled()
 
@@ -253,23 +295,39 @@ func _add_entity_row(entity_type: String, entry: Dictionary) -> Control:
 	var section: Dictionary = _entity_sections[entity_type]
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
-	var id_input := LineEdit.new()
-	id_input.text = str(entry.get("id", ""))
-	id_input.placeholder_text = _id_prefix_hint(entity_type)
-	id_input.custom_minimum_size = Vector2(150, 0)
-	row.add_child(id_input)
-	var desc_input := LineEdit.new()
-	desc_input.text = str(entry.get("description", ""))
-	desc_input.placeholder_text = "description"
-	desc_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(desc_input)
+
+	# Phase 32: build one LineEdit per spec field. Inputs is keyed
+	# by field name so _read_entity_array can read them back without
+	# walking the row's children.
+	var inputs: Dictionary = {}
+	var spec: Array = _ENTITY_FIELD_SPEC.get(entity_type, [
+		# Fallback for entity types we forgot to declare — at least
+		# render id + description so the form isn't useless.
+		{"key": "id", "min_width": 150, "expand": false},
+		{"key": "description", "min_width": 0, "expand": true},
+	]) as Array
+	for field in spec:
+		var key: String = str((field as Dictionary).get("key", ""))
+		if key.is_empty():
+			continue
+		var le := LineEdit.new()
+		le.text = str(entry.get(key, ""))
+		le.placeholder_text = _placeholder_for(entity_type, key)
+		var min_w: float = float((field as Dictionary).get("min_width", 0))
+		if min_w > 0.0:
+			le.custom_minimum_size = Vector2(min_w, 0)
+		if bool((field as Dictionary).get("expand", false)):
+			le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(le)
+		inputs[key] = le
+
 	var remove_btn := Button.new()
 	remove_btn.text = "×"
 	remove_btn.tooltip_text = "Remove this %s" % entity_type.trim_suffix("s")
 	# Identity-based removal: search the rows Array for the exact row
 	# Node we built. Dictionary.erase with a value comparison would
 	# match by structural equality, which collides when two empty rows
-	# happen to both be {row, id_input, desc_input, original={}}.
+	# happen to both have identical inputs/originals.
 	remove_btn.pressed.connect(func() -> void:
 		var rows_arr: Array = section["rows"]
 		for i in range(rows_arr.size()):
@@ -281,8 +339,24 @@ func _add_entity_row(entity_type: String, entry: Dictionary) -> Control:
 		row.free())
 	row.add_child(remove_btn)
 	(section["container"] as VBoxContainer).add_child(row)
-	(section["rows"] as Array).append({"row": row, "id": id_input, "desc": desc_input, "original": entry})
+	# Row metadata: keep `inputs` (per-field LineEdits) and `original`
+	# (the full record dict, including un-rendered fields like
+	# character.stats) for the read-back path.
+	(section["rows"] as Array).append({
+		"row":      row,
+		"inputs":   inputs,
+		"original": entry,
+	})
 	return row
+
+# Per-field placeholder hint. id fields show the schema's prefix
+# (`mech_*`, `asset_*`, ...). Other fields fall back to the field
+# name. Centralising here so per-type spec changes can pull richer
+# hints if they want.
+func _placeholder_for(entity_type: String, field_key: String) -> String:
+	if field_key == "id":
+		return _id_prefix_hint(entity_type)
+	return field_key
 
 # Hint text matching GDDManager's id-prefix validation. Kept in sync by
 # inspection — there's no programmatic source for it short of poking
@@ -317,22 +391,33 @@ func _read_entity_array(entity_type: String) -> Array:
 	var out: Array = []
 	var section: Dictionary = _entity_sections[entity_type]
 	for entry in (section["rows"] as Array):
-		var id_input: LineEdit = entry["id"]
-		var desc_input: LineEdit = entry["desc"]
-		var id_text: String = id_input.text.strip_edges()
-		var desc_text: String = desc_input.text.strip_edges()
-		if id_text.is_empty() and desc_text.is_empty():
-			# Empty row — user added a row and never filled it. Skip
-			# silently so we don't write a `{id: "", description: ""}`
-			# that would fail validation on save.
+		var inputs: Dictionary = entry.get("inputs", {})
+		# Per-field text. We track empties separately so we can decide
+		# whether the whole row is empty (skip) or just one field is
+		# empty (still save, omit that field).
+		var values: Dictionary = {}
+		var any_non_empty: bool = false
+		for key in inputs.keys():
+			var le: LineEdit = inputs[key]
+			var t: String = le.text.strip_edges()
+			values[key] = t
+			if not t.is_empty():
+				any_non_empty = true
+		if not any_non_empty:
+			# Pure empty row — user clicked + Add and never filled it.
+			# Skip so we don't write garbage that would fail validation.
 			continue
-		# Preserve any extra fields from the original entry. This is
-		# how character.name (etc) survives a form save without us
-		# rendering it.
+		# Preserve any extra fields from the original record. This is
+		# how character.stats / scene.entry_points / dialogue.nodes
+		# survive a save round-trip — the form doesn't render them
+		# but we copy them through.
 		var original: Dictionary = entry.get("original", {})
 		var record: Dictionary = (original as Dictionary).duplicate(true)
-		record["id"] = id_text
-		record["description"] = desc_text
+		# Overwrite rendered fields with the LineEdit values. Empty
+		# strings overwrite too — letting the user clear an existing
+		# field is a real edit (e.g. clearing a character.role).
+		for key in values.keys():
+			record[key] = values[key]
 		out.append(record)
 	return out
 

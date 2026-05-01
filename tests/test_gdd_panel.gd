@@ -454,6 +454,97 @@ func test_approve_writes_two_snapshots():
 	assert_eq(_panel._current_gdd["game_title"], "Approved Title")
 
 
+# ---------- Conversation-mode chat-edit (Phase 31 / ADR 031) ----------
+
+func test_resolve_basis_returns_current_when_no_pending():
+	# Before any chat-edit lands, the basis is the saved baseline.
+	_panel._current_gdd = {"game_title": "saved"}
+	_panel._pending_gdd = {}
+	var basis: Dictionary = _panel._resolve_chat_edit_basis()
+	assert_eq(basis["game_title"], "saved",
+		"with no pending preview, basis should be the saved baseline")
+
+func test_resolve_basis_returns_pending_when_set():
+	# In PREVIEW state, the basis is the latest proposed GDD —
+	# this is what the user is iterating on.
+	_panel._current_gdd = {"game_title": "saved"}
+	_panel._pending_gdd = {"game_title": "proposed (turn 1)"}
+	var basis: Dictionary = _panel._resolve_chat_edit_basis()
+	assert_eq(basis["game_title"], "proposed (turn 1)",
+		"with a pending preview, refinement should iterate on it, not the baseline")
+
+func test_first_submit_increments_turn_to_one():
+	_register_claude()
+	_load_minimal()
+	_panel._chat_edit_input.text = "add stealth"
+	assert_eq(_panel._conversation_turn, 0,
+		"counter starts at 0 before any dispatch")
+	_panel._on_chat_edit_submit_pressed()
+	assert_eq(_panel._conversation_turn, 1,
+		"first submit should bump the turn counter to 1")
+
+func test_refinement_submit_increments_turn():
+	_register_claude()
+	_load_minimal()
+	# Simulate first dispatch + completion landing.
+	_panel._chat_edit_input.text = "add stealth"
+	_panel._on_chat_edit_submit_pressed()
+	_panel._on_chat_edit_completed("claude", _panel._chat_edit_task_id,
+		{"text": JSON.stringify(_minimal_gdd())})
+	# Now in PREVIEW state. Submit a refinement.
+	_panel._chat_edit_input.text = "make it more cinematic"
+	_panel._on_chat_edit_submit_pressed()
+	assert_eq(_panel._conversation_turn, 2,
+		"second submit during PREVIEW should reach turn 2")
+
+func test_submit_in_preview_uses_pending_as_basis():
+	_register_claude()
+	_load_minimal()
+	# Land a first proposal.
+	_panel._chat_edit_input.text = "add stealth"
+	_panel._on_chat_edit_submit_pressed()
+	var proposed: Dictionary = _minimal_gdd()
+	proposed["game_title"] = "proposed-after-turn-1"
+	_panel._on_chat_edit_completed("claude", _panel._chat_edit_task_id,
+		{"text": JSON.stringify(proposed)})
+	# Verify the basis the form would use NOW is the proposed one.
+	var basis: Dictionary = _panel._resolve_chat_edit_basis()
+	assert_eq(basis["game_title"], "proposed-after-turn-1",
+		"after first turn lands, refinements iterate on the proposal")
+
+func test_approve_resets_turn_counter():
+	_register_claude()
+	var path: String = _load_minimal()
+	# Synthesize a pending preview.
+	_panel._pending_gdd = _panel._current_gdd.duplicate(true)
+	_panel._pending_gdd["game_title"] = "Approved"
+	_panel._conversation_turn = 3
+	_panel._on_approve_pressed()
+	assert_eq(_panel._conversation_turn, 0,
+		"approving the proposal should end the conversation (turn reset)")
+
+func test_reject_resets_turn_counter():
+	_register_claude()
+	_load_minimal()
+	_panel._pending_gdd = _minimal_gdd()
+	_panel._conversation_turn = 4
+	_panel._on_reject_pressed()
+	assert_eq(_panel._conversation_turn, 0,
+		"rejecting the proposal should end the conversation (turn reset)")
+
+func test_submit_stays_enabled_in_preview_state():
+	# Phase 31 changes the disabled-button policy. Mid-flight still
+	# disables (so the user can't double-dispatch), but PREVIEW
+	# state keeps Submit enabled for refinement.
+	_register_claude()
+	_load_minimal()
+	_panel._pending_gdd = _minimal_gdd()
+	_panel._chat_edit_task_id = ""  # not in flight
+	_panel._refresh_chat_edit_visibility()
+	assert_false(_panel._chat_edit_submit.disabled,
+		"Submit should be enabled in PREVIEW state for refinement turns")
+
+
 # ---------- Auto-fix cross-refs (Phase 29 / ADR 029) ----------
 
 # Helper: build a minimal GDD with one dangling task dependency.
@@ -793,7 +884,8 @@ func test_edit_save_with_invalid_gdd_stays_in_edit_mode():
 	_panel._on_edit_pressed()
 	var mechanics: Dictionary = _panel._edit_form._entity_sections["mechanics"]
 	var first_row: Dictionary = (mechanics["rows"] as Array)[0]
-	(first_row["id"] as LineEdit).text = "wrong_prefix"
+	# Phase 32: row inputs live under "inputs" keyed by field name.
+	(first_row["inputs"]["id"] as LineEdit).text = "wrong_prefix"
 	watch_signals(_panel)
 	_panel._edit_form._on_save_pressed()
 	# Apply (post-state) save_gdd should have failed; edit_saved
