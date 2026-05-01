@@ -87,7 +87,8 @@ orchestra/
 │   ├── mock_audio_plugin.gd  # Stress test: audio generator + RATE_LIMIT trigger
 │   ├── tripo_plugin.gd       # Real: text-to-3D
 │   ├── elevenlabs_plugin.gd  # Real: text-to-speech
-│   └── claude_plugin.gd      # Real: Anthropic Messages API
+│   ├── claude_plugin.gd      # Real: Anthropic Messages API
+│   └── openai_image_plugin.gd # Real: OpenAI text-to-image
 ├── schemas/
 │   └── gdd_schema.json       # Strict JSON schema for the GDD
 ├── tests/                    # GUT tests (mock plugins only, no network)
@@ -139,6 +140,8 @@ orchestra/
 - `docs/adrs/032-per-entity-form-fields.md` — per-type rendered fields in form-edit
 - `docs/adrs/033-settings-ui-overlay.md` — registry-driven settings editor
 - `docs/adrs/034-gdd-markdown-export.md` — GDD export to Markdown
+- `docs/adrs/035-snapshot-diff-viewer.md` — read-only snapshot vs current diff
+- `docs/adrs/036-openai-image-plugin.md` — real text-to-image via OpenAI
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

@@ -43,6 +43,12 @@ const ENTRIES: Dictionary = {
 		"env_var":     "ANTHROPIC_API_KEY",
 		"config_keys": ["api_key", "pricing"],
 	},
+	"openai_image": {
+		"path":        "res://plugins/openai_image_plugin.gd",
+		"category":    "image",
+		"env_var":     "OPENAI_API_KEY",
+		"config_keys": ["api_key", "per_image_cost_usd"],
+	},
 }
 
 

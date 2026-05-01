@@ -338,7 +338,7 @@ func _log_register_diagnostics(orch: Node) -> void:
 		return
 	print("[main_shell] no plugins auto-registered.")
 	print("[main_shell] env vars visible to Godot (prefix-only):")
-	for v in ["ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "TRIPO_API_KEY"]:
+	for v in ["ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "TRIPO_API_KEY", "OPENAI_API_KEY"]:
 		var val: String = OS.get_environment(v)
 		if val.is_empty():
 			print("  %s = (unset)" % v)

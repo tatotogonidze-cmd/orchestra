@@ -410,6 +410,68 @@ func test_clean_dangling_handles_multiple_per_record():
 		"all dangling entries across all fields should be counted")
 
 
+# ---------- Snapshot diff (Phase 35 / ADR 035) ----------
+
+func test_diff_versions_success_returns_pretty_json():
+	var path: String = "user://_test_diff_v1_%d.json" % Time.get_ticks_msec()
+	var g: Dictionary = _minimal_valid_gdd()
+	g["game_title"] = "First"
+	gm.save_gdd(g, path)
+	g["game_title"] = "Second"
+	gm.save_gdd(g, path)
+	var r: Dictionary = gm.diff_versions(1, 2)
+	assert_true(bool(r["success"]),
+		"diff_versions should succeed when both versions exist")
+	assert_true("First" in str(r["before_text"]),
+		"v1 text should contain the v1 title")
+	assert_true("Second" in str(r["after_text"]),
+		"v2 text should contain the v2 title")
+	# Pretty-printed (2-space indent) so the panel's line-diff is meaningful.
+	assert_true("  " in str(r["before_text"]),
+		"output should be pretty-printed for line-diff readability")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_diff_versions_missing_version_fails_gracefully():
+	# No snapshots created yet — both lookups should fail.
+	var r: Dictionary = gm.diff_versions(1, 2)
+	assert_false(bool(r["success"]),
+		"diff_versions should fail when versions don't exist")
+	assert_true("v1" in str(r.get("error", "")),
+		"error should call out which version was missing; got: %s"
+			% str(r.get("error", "")))
+
+func test_diff_versions_identical_returns_equal_strings():
+	var path: String = "user://_test_diff_eq_%d.json" % Time.get_ticks_msec()
+	gm.save_gdd(_minimal_valid_gdd(), path)
+	var r: Dictionary = gm.diff_versions(1, 1)
+	assert_true(bool(r["success"]),
+		"a == b is a valid (degenerate) request")
+	assert_eq(str(r["before_text"]), str(r["after_text"]),
+		"comparing v1 to itself should yield identical strings")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_diff_version_against_uses_in_memory_state():
+	var path: String = "user://_test_diff_v_against_%d.json" % Time.get_ticks_msec()
+	gm.save_gdd(_minimal_valid_gdd(), path)
+	# In-memory current state is *different* from v1 — never saved.
+	var current: Dictionary = _minimal_valid_gdd()
+	current["game_title"] = "In-memory only"
+	var r: Dictionary = gm.diff_version_against(1, current)
+	assert_true(bool(r["success"]),
+		"diff_version_against should succeed when snapshot exists")
+	assert_true("In-memory only" in str(r["after_text"]),
+		"after_text should be the in-memory dict, not a re-loaded snapshot")
+	assert_eq(int(r["after_version"]), -1,
+		"after_version should be -1 to flag the in-memory side")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_diff_version_against_missing_snapshot_fails():
+	var current: Dictionary = _minimal_valid_gdd()
+	var r: Dictionary = gm.diff_version_against(99, current)
+	assert_false(bool(r["success"]),
+		"diff_version_against should fail when snapshot version doesn't exist")
+
+
 # ---------- Markdown export (Phase 34 / ADR 034) ----------
 
 func test_export_to_markdown_returns_non_empty_string():

@@ -28,7 +28,7 @@ through to the smoke script, not consumed by Godot.
 
 Flags:
 
-- `--plugin` — required. One of `tripo`, `elevenlabs`, `claude`.
+- `--plugin` — required. One of `tripo`, `elevenlabs`, `claude`, `openai_image`.
 - `--prompt` — required. The generation prompt.
 - `--params` — optional JSON object merged into the plugin's params. Use
   single-quotes around the JSON in PowerShell so `"` isn't eaten.
@@ -98,6 +98,31 @@ remote URL (not a `user://` file), so `--out` is ignored — open the URL in
 a browser to download the `.glb`.
 
 Longer timeouts are fine. Tripo's own pipeline has a deadline.
+
+## OpenAI — image
+
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+godot --headless -s tools/integration/smoke.gd -- `
+      --plugin=openai_image `
+      --prompt="a cozy stone cottage by a misty lake, painterly" `
+      --out=out/cottage.png
+```
+
+The plugin saves to `user://assets/image/<task_id>.png` and the smoke
+script copies that out to `./out/cottage.png`. Single-POST sync — no
+polling — so `--timeout=60` is usually enough.
+
+You can override model / size / quality in params:
+
+```powershell
+--params='{"model":"gpt-image-1","size":"1024x1792","quality":"hd"}'
+```
+
+`size` accepts `1024x1024`, `1024x1792`, `1792x1024`. `quality` is
+`standard` or `hd`. The result includes a `revised_prompt` field —
+OpenAI may rewrite the prompt to suit the model; the rewritten text
+is in the smoke output.
 
 ## When smoke fails
 

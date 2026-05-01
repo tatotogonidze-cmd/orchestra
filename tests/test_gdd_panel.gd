@@ -900,6 +900,84 @@ func test_edit_save_with_invalid_gdd_stays_in_edit_mode():
 		"failed save should leave the user in edit mode to retry")
 
 
+# ---------- Snapshot Diff Viewer (Phase 35 / ADR 035) ----------
+
+func _make_two_snapshots() -> String:
+	# Save twice — each save creates a snapshot. Returns the JSON path
+	# the panel was pointed at.
+	var g: Dictionary = _minimal_gdd()
+	g["game_title"] = "Initial"
+	var path: String = _write_gdd(g)
+	# Drive through the panel so _current_gdd / _current_gdd_path are
+	# in sync after the second save.
+	_panel.show_dialog()
+	_panel._path_input.text = path
+	_panel._on_load_pressed()
+	# First save → snapshot v1.
+	_orch.gdd_manager.save_gdd(g, path)
+	# Mutate + save → snapshot v2.
+	g["game_title"] = "Second Pass"
+	_orch.gdd_manager.save_gdd(g, path)
+	# Reload so _current_gdd reflects the latest disk state.
+	_panel._on_load_pressed()
+	return path
+
+func test_snapshot_diff_section_starts_hidden():
+	assert_false(_panel._snapshot_diff_section.visible,
+		"snapshot-diff section should start hidden")
+
+func test_compare_button_renders_diff():
+	_make_two_snapshots()
+	# v1 is the first snapshot — _current_gdd is "Second Pass" content.
+	_panel._on_compare_pressed(1)
+	assert_true(_panel._snapshot_diff_section.visible,
+		"snapshot-diff section should surface on Compare")
+	assert_true("Initial" in _panel._snapshot_diff_before_view.text,
+		"before pane should show the v1 title")
+	assert_true("Second Pass" in _panel._snapshot_diff_after_view.text,
+		"after pane should show the current title")
+
+func test_compare_summary_reports_line_counts():
+	_make_two_snapshots()
+	_panel._on_compare_pressed(1)
+	var summary: String = _panel._snapshot_diff_summary_label.text
+	assert_true("lines:" in summary,
+		"summary should mention line count; got: %s" % summary)
+
+func test_compare_header_includes_version():
+	_make_two_snapshots()
+	_panel._on_compare_pressed(2)
+	assert_true("v2" in _panel._snapshot_diff_header.text,
+		"header should call out which version we're comparing; got: %s"
+			% _panel._snapshot_diff_header.text)
+
+func test_compare_close_button_hides_section():
+	_make_two_snapshots()
+	_panel._on_compare_pressed(1)
+	assert_true(_panel._snapshot_diff_section.visible)
+	_panel._on_snapshot_diff_close_pressed()
+	assert_false(_panel._snapshot_diff_section.visible,
+		"Close should hide the snapshot-diff section")
+
+func test_compare_without_loaded_gdd_does_not_crash():
+	_panel.show_dialog()
+	_panel._on_compare_pressed(1)
+	# Status updates, no exception, section stays hidden.
+	assert_false(_panel._snapshot_diff_section.visible,
+		"section should stay hidden when there's nothing to compare to")
+	assert_true("load a GDD" in _panel._status_label.text,
+		"status should guide the user; got: %s" % _panel._status_label.text)
+
+func test_compare_missing_snapshot_surfaces_error():
+	_load_minimal()
+	# No snapshots created — Compare for v99 should fail cleanly.
+	_panel._on_compare_pressed(99)
+	assert_false(_panel._snapshot_diff_section.visible,
+		"section should NOT show for a failed compare")
+	assert_true("Compare failed" in _panel._status_label.text,
+		"status should report the failure; got: %s" % _panel._status_label.text)
+
+
 # ---------- Export → Markdown (Phase 34 / ADR 034) ----------
 
 func test_export_button_disabled_without_gdd():

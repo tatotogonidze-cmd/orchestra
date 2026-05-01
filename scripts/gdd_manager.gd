@@ -449,6 +449,65 @@ func _prune_snapshots() -> void:
 		var abs_path: String = ProjectSettings.globalize_path(snaps[i]["path"])
 		DirAccess.remove_absolute(abs_path)
 
+# Diff two snapshot versions (Phase 35 / ADR 035). Returns
+# pretty-printed JSON strings for both versions, ready for the
+# panel's existing line-diff renderer (ADR 020 + ADR 030). Pure
+# wrapper around two load_gdd calls — no comparison work happens
+# here; the UI side does the diff visualisation.
+#
+# Conventional usage: caller passes (snapshot_version,
+# current_state_as_v=-1) — the v=-1 sentinel means "compare
+# against the in-memory current GDD"; that branch is handled
+# by the caller (gdd_panel) since we don't hold the current
+# state here.
+#
+# Returns {success: bool, before_text: String, after_text: String,
+#          before_version: int, after_version: int, error?: String}.
+func diff_versions(version_a: int, version_b: int) -> Dictionary:
+	var a: Dictionary = _load_snapshot_for_diff(version_a)
+	if not bool(a.get("success", false)):
+		return {"success": false, "error":
+			"snapshot v%d: %s" % [version_a, str(a.get("error", "unknown"))]}
+	var b: Dictionary = _load_snapshot_for_diff(version_b)
+	if not bool(b.get("success", false)):
+		return {"success": false, "error":
+			"snapshot v%d: %s" % [version_b, str(b.get("error", "unknown"))]}
+	return {
+		"success":        true,
+		"before_text":    JSON.stringify(a["gdd"], "  "),
+		"after_text":     JSON.stringify(b["gdd"], "  "),
+		"before_version": version_a,
+		"after_version":  version_b,
+	}
+
+# Same shape as diff_versions but the "after" side is an
+# in-memory GDD passed by the caller (rather than a snapshot).
+# Used by gdd_panel's Compare-against-current flow — the
+# currently-loaded GDD may not have been saved yet (e.g.
+# pending chat-edit), so we can't always look it up by version.
+func diff_version_against(version: int, current_gdd: Dictionary) -> Dictionary:
+	var snap: Dictionary = _load_snapshot_for_diff(version)
+	if not bool(snap.get("success", false)):
+		return {"success": false, "error":
+			"snapshot v%d: %s" % [version, str(snap.get("error", "unknown"))]}
+	return {
+		"success":        true,
+		"before_text":    JSON.stringify(snap["gdd"], "  "),
+		"after_text":     JSON.stringify(current_gdd, "  "),
+		"before_version": version,
+		"after_version":  -1,
+	}
+
+# Helper: walk list_snapshots() to find a version, then load it.
+# Returns {success, gdd, error?}. Folded out so both diff helpers
+# share the lookup path.
+func _load_snapshot_for_diff(version: int) -> Dictionary:
+	for s in list_snapshots():
+		if int(s["version"]) == version:
+			return load_gdd(s["path"])
+	return {"success": false, "error": "not found", "gdd": {}}
+
+
 # Load a snapshot by version. Does NOT auto-apply — caller can pass result.gdd to save_gdd.
 func rollback(version: int) -> Dictionary:
 	for s in list_snapshots():

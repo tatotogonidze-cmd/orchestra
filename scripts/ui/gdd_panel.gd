@@ -107,6 +107,17 @@ var _diff_after_view: TextEdit
 var _approve_button: Button
 var _reject_button: Button
 
+# Snapshot-diff section (Phase 35 / ADR 035). Surfaces from the
+# Compare button on each snapshot row; shows the picked snapshot
+# vs the currently-loaded GDD. Mirrors _diff_section's shape but
+# has no Approve / Reject — read-only viewer with a Close button.
+var _snapshot_diff_section: VBoxContainer
+var _snapshot_diff_header: Label
+var _snapshot_diff_summary_label: Label
+var _snapshot_diff_before_view: TextEdit
+var _snapshot_diff_after_view: TextEdit
+var _snapshot_diff_close_button: Button
+
 # Last loaded GDD. Empty dict when nothing has been loaded yet (or after
 # a load failure). Tests poke at this directly to verify the load
 # pipeline.
@@ -372,6 +383,66 @@ func _ready() -> void:
 
 	_diff_section.visible = false  # hidden until a chat-edit lands
 
+	# ---------- Phase 35: snapshot-diff section ----------
+	# Independent surface — chat-edit and snapshot-compare are different
+	# moments and different mental models. Sharing _diff_section would
+	# put Approve/Reject buttons next to a read-only comparison.
+	_snapshot_diff_section = VBoxContainer.new()
+	_snapshot_diff_section.add_theme_constant_override("separation", 6)
+	_vbox.add_child(_snapshot_diff_section)
+
+	_snapshot_diff_header = Label.new()
+	_snapshot_diff_header.text = "Snapshot comparison"
+	_snapshot_diff_header.add_theme_font_size_override("font_size", 14)
+	_snapshot_diff_section.add_child(_snapshot_diff_header)
+
+	_snapshot_diff_summary_label = Label.new()
+	_snapshot_diff_summary_label.text = ""
+	_snapshot_diff_summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_snapshot_diff_section.add_child(_snapshot_diff_summary_label)
+
+	var snap_diff_panes := HBoxContainer.new()
+	snap_diff_panes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	snap_diff_panes.add_theme_constant_override("separation", 6)
+	_snapshot_diff_section.add_child(snap_diff_panes)
+
+	var snap_before_box := VBoxContainer.new()
+	snap_before_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	snap_diff_panes.add_child(snap_before_box)
+	var snap_before_label := Label.new()
+	snap_before_label.text = "Snapshot"
+	snap_before_label.modulate = Color(0.7, 0.7, 0.7, 1.0)
+	snap_before_box.add_child(snap_before_label)
+	_snapshot_diff_before_view = TextEdit.new()
+	_snapshot_diff_before_view.editable = false
+	_snapshot_diff_before_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_snapshot_diff_before_view.custom_minimum_size = Vector2(0, 200)
+	snap_before_box.add_child(_snapshot_diff_before_view)
+
+	var snap_after_box := VBoxContainer.new()
+	snap_after_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	snap_diff_panes.add_child(snap_after_box)
+	var snap_after_label := Label.new()
+	snap_after_label.text = "Current"
+	snap_after_label.modulate = Color(0.7, 0.7, 0.7, 1.0)
+	snap_after_box.add_child(snap_after_label)
+	_snapshot_diff_after_view = TextEdit.new()
+	_snapshot_diff_after_view.editable = false
+	_snapshot_diff_after_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_snapshot_diff_after_view.custom_minimum_size = Vector2(0, 200)
+	snap_after_box.add_child(_snapshot_diff_after_view)
+
+	var snap_diff_actions := HBoxContainer.new()
+	snap_diff_actions.alignment = BoxContainer.ALIGNMENT_END
+	_snapshot_diff_section.add_child(snap_diff_actions)
+
+	_snapshot_diff_close_button = Button.new()
+	_snapshot_diff_close_button.text = "Close comparison"
+	_snapshot_diff_close_button.pressed.connect(_on_snapshot_diff_close_pressed)
+	snap_diff_actions.add_child(_snapshot_diff_close_button)
+
+	_snapshot_diff_section.visible = false  # hidden until Compare clicked
+
 	# ---------- Phase 18: form-based edit ----------
 	# The form lives at the bottom of the vbox. While in edit mode we
 	# hide the view-only widgets above so the panel doesn't display
@@ -616,6 +687,15 @@ func _render_snapshots() -> void:
 		path_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		path_lbl.modulate = Color(0.7, 0.7, 0.7, 1.0)
 		row.add_child(path_lbl)
+		# Phase 35 (ADR 035): Compare against current. Disabled when no
+		# GDD is currently loaded — there's nothing to compare to.
+		var compare_btn := Button.new()
+		compare_btn.text = "Compare"
+		compare_btn.tooltip_text = "Show line-diff between this snapshot and the currently-loaded GDD"
+		compare_btn.disabled = _current_gdd.is_empty()
+		compare_btn.pressed.connect(func() -> void:
+			_on_compare_pressed(version))
+		row.add_child(compare_btn)
 		var rollback_btn := Button.new()
 		rollback_btn.text = "Rollback"
 		rollback_btn.tooltip_text = "Restore this snapshot to disk"
@@ -759,6 +839,59 @@ func _on_rollback_pressed(version: int) -> void:
 	else:
 		_status_label.text = "Rollback failed: %s" % str(result.get("error", "unknown"))
 		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+
+# Phase 35 (ADR 035): Compare a snapshot against the currently-loaded
+# GDD. Asks gdd_manager to load the snapshot and pretty-print both
+# sides, then drives the snapshot-diff section's TextEdits + line
+# marks (reusing the LCS pipeline from ADR 020).
+func _on_compare_pressed(version: int) -> void:
+	if _orch == null or _orch.gdd_manager == null:
+		_status_label.text = "no orchestrator bound (internal error)"
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	if _current_gdd.is_empty():
+		_status_label.text = "load a GDD before comparing"
+		_status_label.modulate = Color(1.0, 0.7, 0.2, 1.0)
+		return
+	var r: Dictionary = _orch.gdd_manager.diff_version_against(
+		version, _current_gdd)
+	if not bool(r.get("success", false)):
+		_status_label.text = "Compare failed: %s" % str(r.get("error", "unknown"))
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	var before_text: String = str(r["before_text"])
+	var after_text: String = str(r["after_text"])
+	# Reuse the existing _compute_line_diff for marks. Word-diff (ADR
+	# 030) operates on a single before/after pair too — but the
+	# snapshot-comparison surface intentionally stays line-only for
+	# scanability across long-range diffs.
+	var marks: Dictionary = _compute_line_diff(before_text, after_text)
+	var added: int = 0
+	var removed: int = 0
+	for m in (marks["after_marks"] as Array):
+		if str(m) == "added":
+			added += 1
+	for m in (marks["before_marks"] as Array):
+		if str(m) == "removed":
+			removed += 1
+	_snapshot_diff_header.text = "Snapshot v%d → current" % version
+	_snapshot_diff_summary_label.text = "lines: -%d  +%d" % [removed, added]
+	_snapshot_diff_before_view.text = before_text
+	_snapshot_diff_after_view.text = after_text
+	_apply_line_marks(_snapshot_diff_before_view,
+		marks["before_marks"] as Array,
+		"removed",
+		Color(1.0, 0.3, 0.3, 0.3))
+	_apply_line_marks(_snapshot_diff_after_view,
+		marks["after_marks"] as Array,
+		"added",
+		Color(0.3, 1.0, 0.3, 0.3))
+	_snapshot_diff_section.visible = true
+	_status_label.text = "Comparing v%d to current" % version
+	_status_label.modulate = Color(0.85, 0.85, 0.85, 1.0)
+
+func _on_snapshot_diff_close_pressed() -> void:
+	_snapshot_diff_section.visible = false
 
 func _on_close_pressed() -> void:
 	visible = false
