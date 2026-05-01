@@ -31,3 +31,8 @@ tests/.gut_editor_config.json
 # IDE
 .vscode/
 .idea/
+dist/ 
+*.exe 
+*.dll 
+*.pdb 
+export_presets.cfg~ 
