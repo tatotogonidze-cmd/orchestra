@@ -44,6 +44,13 @@ var _limit_input: LineEdit
 var _apply_limit_button: Button
 var _reset_button: Button
 var _close_button: Button
+# Phase 26: hard-gating opt-in. When checked, Orchestrator.generate
+# refuses dispatches once the session is at/over the limit. Default
+# unchecked = "warn" mode (Phase 13 behaviour preserved).
+var _hard_block_checkbox: CheckBox
+
+# Setting key the HUD reads + writes for the dispatch policy.
+const _SETTING_KEY_POLICY: String = "cost.dispatch_policy"
 
 
 func _ready() -> void:
@@ -125,6 +132,15 @@ func _ready() -> void:
 	_apply_limit_button.pressed.connect(_on_apply_limit_pressed)
 	limit_row.add_child(_apply_limit_button)
 
+	# Phase 26: hard-gating opt-in. Persists immediately on toggle so
+	# the Orchestrator picks up the new policy on the very next
+	# dispatch — no need to click Apply for this row.
+	_hard_block_checkbox = CheckBox.new()
+	_hard_block_checkbox.text = "Hard-block dispatches when over budget"
+	_hard_block_checkbox.tooltip_text = "When enabled, Generate refuses to dispatch once the session is at the configured limit. Default is warn-only."
+	_hard_block_checkbox.toggled.connect(_on_hard_block_toggled)
+	_vbox.add_child(_hard_block_checkbox)
+
 	# Footer.
 	var footer := HBoxContainer.new()
 	footer.alignment = BoxContainer.ALIGNMENT_END
@@ -201,6 +217,15 @@ func _refresh() -> void:
 	# Limit editor: prefill with the current value (or empty for "not set").
 	_limit_input.text = "" if limit <= 0.0 else "%.2f" % limit
 
+	# Phase 26: reflect persisted dispatch policy into the checkbox.
+	# Default ("warn") leaves the box unchecked, preserving Phase 13
+	# behaviour for users who never opened the HUD.
+	if _hard_block_checkbox != null and _settings != null \
+			and _settings.has_method("get_value"):
+		var policy: String = str(_settings.call(
+			"get_value", _SETTING_KEY_POLICY, "warn"))
+		_hard_block_checkbox.button_pressed = (policy == "hard_block")
+
 	# Per-category breakdown rows.
 	_rebuild_breakdown(spent)
 
@@ -268,6 +293,17 @@ func _on_reset_pressed() -> void:
 func _on_close_pressed() -> void:
 	visible = false
 	emit_signal("closed")
+
+# Phase 26: persist immediately on toggle. We don't gate on Apply
+# because the policy is a simple boolean — the user's intent is
+# clear from the click. Orchestrator reads cost.dispatch_policy on
+# every generate, so the next dispatch picks up the new value
+# without further wiring.
+func _on_hard_block_toggled(pressed: bool) -> void:
+	if _settings == null or not _settings.has_method("set_value"):
+		return
+	var policy: String = "hard_block" if pressed else "warn"
+	_settings.call("set_value", _SETTING_KEY_POLICY, policy)
 
 # Escape acts like the Close button. Gated on visibility so a stray Esc
 # elsewhere in the app doesn't fire us.

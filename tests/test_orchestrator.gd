@@ -219,3 +219,75 @@ func test_shutdown_clears_prompt_cache():
 	orch._prompts_by_task["tripo:b"] = "beta"
 	orch.shutdown()
 	assert_eq(orch._prompts_by_task.size(), 0, "shutdown didn't clear prompt cache")
+
+
+# ---------- Hard cost gating (Phase 26 / ADR 026) ----------
+
+# Configure the orchestrator's settings_manager to a per-test path.
+# Avoids polluting the real user://settings.json across test runs and
+# ensures the policy lookup starts from a clean slate every time.
+func _isolate_settings() -> void:
+	orch.settings_manager.configure(
+		"user://_test_orch_settings_%d_%d.json" % [
+			Time.get_ticks_msec(), randi() % 100000])
+
+func test_warn_policy_lets_dispatch_through():
+	# Default policy ("warn") should never block. Even with the
+	# session over its limit, generate proceeds normally.
+	_isolate_settings()
+	orch.cost_tracker.set_session_limit(1.0)
+	orch.cost_tracker.record_cost("claude", 5.0)  # over limit
+	# Default — no setting written, policy reads "warn".
+	orch.register_plugin_with_config("claude", {"api_key": "sk-ant-test"})
+	var tid: String = orch.generate("claude", "hi", {})
+	assert_false(tid.is_empty(),
+		"warn policy should pass through to plugin_manager.generate")
+	assert_false("blocked" in tid,
+		"task_id from warn-mode dispatch should not look like a block marker")
+
+func test_hard_block_under_limit_lets_dispatch_through():
+	# Hard-block policy but under the limit → still dispatches.
+	_isolate_settings()
+	orch.settings_manager.set_value("cost.dispatch_policy", "hard_block")
+	orch.cost_tracker.set_session_limit(10.0)
+	orch.cost_tracker.record_cost("claude", 5.0)  # under limit
+	orch.register_plugin_with_config("claude", {"api_key": "sk-ant-test"})
+	var tid: String = orch.generate("claude", "hi", {})
+	assert_false(tid.is_empty())
+	assert_false("blocked" in tid)
+
+func test_hard_block_over_limit_blocks_and_emits_failure():
+	_isolate_settings()
+	orch.settings_manager.set_value("cost.dispatch_policy", "hard_block")
+	orch.cost_tracker.set_session_limit(1.0)
+	orch.cost_tracker.record_cost("claude", 5.0)
+	orch.register_plugin_with_config("claude", {"api_key": "sk-ant-test"})
+	# Watch plugin_manager's signal — the synthetic failure travels
+	# through the same channel as any real task failure.
+	watch_signals(orch.plugin_manager)
+	var tid: String = orch.generate("claude", "hi", {})
+	# Synthetic task_id with the "blocked" marker is returned so
+	# UI surfaces still see something (a "task" appeared).
+	assert_true("blocked" in tid,
+		"blocked dispatch should return a synthetic task_id; got: %s" % tid)
+	assert_signal_emitted(orch.plugin_manager, "plugin_task_failed",
+		"hard-blocked dispatch should emit plugin_task_failed")
+	# Inspect the error payload — should carry INSUFFICIENT_BUDGET.
+	var params: Array = get_signal_parameters(
+		orch.plugin_manager, "plugin_task_failed")
+	var error_dict: Dictionary = params[2] as Dictionary
+	assert_eq(str(error_dict["code"]), "INSUFFICIENT_BUDGET",
+		"error code should be INSUFFICIENT_BUDGET; got: %s"
+			% str(error_dict.get("code", "")))
+
+func test_hard_block_with_no_limit_does_not_block():
+	# Limit=0 means "no limit". Hard-block policy should be a no-op
+	# in that case — there's nothing to be over.
+	_isolate_settings()
+	orch.settings_manager.set_value("cost.dispatch_policy", "hard_block")
+	# Don't set a limit; record some cost.
+	orch.cost_tracker.record_cost("claude", 100.0)
+	orch.register_plugin_with_config("claude", {"api_key": "sk-ant-test"})
+	var tid: String = orch.generate("claude", "hi", {})
+	assert_false("blocked" in tid,
+		"with no limit configured, hard-block should not gate dispatches")

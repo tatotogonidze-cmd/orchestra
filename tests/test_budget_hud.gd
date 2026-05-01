@@ -208,3 +208,55 @@ func test_apply_without_settings_works_without_persistence():
 	h._limit_input.text = "5"
 	h._on_apply_limit_pressed()
 	assert_almost_eq((ctx["tracker"] as Node).get_session_limit(), 5.0, 0.001)
+
+
+# ---------- Hard-block policy toggle (Phase 26 / ADR 026) ----------
+
+func test_hud_builds_hard_block_checkbox():
+	var h: Node = BudgetHudScript.new()
+	add_child_autofree(h)
+	assert_not_null(h._hard_block_checkbox,
+		"_hard_block_checkbox should be built (Phase 26)")
+	assert_false(h._hard_block_checkbox.button_pressed,
+		"checkbox should default to unchecked (warn mode)")
+
+func test_toggle_hard_block_persists_policy():
+	var ctx: Dictionary = _make_hud_with_tracker()
+	var h: Node = ctx["hud"]
+	var settings: Node = _make_settings()
+	h.bind(ctx["tracker"], settings)
+	h.show_dialog()
+	# Simulate the user checking the box. The connect target is
+	# _on_hard_block_toggled — call it directly.
+	h._on_hard_block_toggled(true)
+	assert_eq(str(settings.get_value("cost.dispatch_policy", "warn")),
+		"hard_block",
+		"toggling on should persist 'hard_block'")
+	# Toggle off persists the explicit warn value (so future reads
+	# don't accidentally fall through to the default).
+	h._on_hard_block_toggled(false)
+	assert_eq(str(settings.get_value("cost.dispatch_policy", "")),
+		"warn",
+		"toggling off should persist 'warn'")
+
+func test_show_dialog_reflects_persisted_policy():
+	# A previously-saved hard_block setting should pre-check the box
+	# the next time the HUD opens.
+	var ctx: Dictionary = _make_hud_with_tracker()
+	var h: Node = ctx["hud"]
+	var settings: Node = _make_settings()
+	settings.set_value("cost.dispatch_policy", "hard_block")
+	h.bind(ctx["tracker"], settings)
+	h.show_dialog()
+	assert_true(h._hard_block_checkbox.button_pressed,
+		"persisted 'hard_block' should pre-check the checkbox on open")
+
+func test_toggle_without_settings_is_safe_noop():
+	# Without a bound settings_manager, the toggle handler should
+	# silently no-op rather than crash.
+	var ctx: Dictionary = _make_hud_with_tracker()
+	var h: Node = ctx["hud"]
+	h.bind(ctx["tracker"])  # no settings
+	h.show_dialog()
+	h._on_hard_block_toggled(true)
+	pass_test("toggle without settings is a graceful no-op")

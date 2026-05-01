@@ -128,6 +128,7 @@ orchestra/
 - `docs/adrs/023-scene-tester-preview-pipeline.md` — metadata-only scene tester + 3D preview
 - `docs/adrs/024-settings-store.md` — central persistent preferences (plain JSON)
 - `docs/adrs/025-per-plugin-param-persistence.md` — restore last-used params per plugin
+- `docs/adrs/026-hard-cost-gating.md` — opt-in dispatch refusal at the limit
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

@@ -167,10 +167,50 @@ func register_plugin_with_config(plugin_name: String, config: Dictionary) -> Dic
 # of reaching into plugin_manager. We also record the prompt here so that when
 # the task completes we can tag the resulting asset with provenance.
 func generate(plugin_name: String, prompt: String, params: Dictionary = {}) -> String:
+	# Phase 26 (ADR 026): hard cost gating. When the user has opted
+	# into "hard_block" via cost.dispatch_policy AND the session
+	# is at-or-over the configured limit, refuse to dispatch. We
+	# emit a synthetic plugin_task_failed via PluginManager so the
+	# task_list / future budget-aware UI sees the failure on the
+	# same code path as any other failed task — no parallel error
+	# surface to subscribe to. Returns the synthetic task_id so
+	# the caller (generate_form) can display it like any other
+	# dispatch.
+	if _is_dispatch_blocked():
+		var blocked_id: String = "%s:blocked_%d_%d" % [
+			plugin_name, Time.get_ticks_msec(), randi() % 1_000_000]
+		var spent: float = float(cost_tracker.get_total())
+		var limit: float = float(cost_tracker.get_session_limit())
+		var err: Dictionary = {
+			"code":      BasePluginScript.ERR_INSUFFICIENT_BUDGET,
+			"message":   "session limit reached ($%.2f / $%.2f); dispatch blocked by hard-gating policy" % [spent, limit],
+			"retryable": false,
+		}
+		plugin_manager.emit_signal("plugin_task_failed",
+			plugin_name, blocked_id, err)
+		return blocked_id
 	var tid: String = plugin_manager.generate(plugin_name, prompt, params)
 	if tid != "":
 		_prompts_by_task[tid] = prompt
 	return tid
+
+# Phase 26: returns true iff (a) settings opted into "hard_block",
+# AND (b) cost_tracker has a positive limit it's currently at-or-over.
+# Defensive against partial wiring — returns false (no gating) when
+# any required dependency is missing, which preserves Phase 13's
+# warn-only default.
+func _is_dispatch_blocked() -> bool:
+	if cost_tracker == null or settings_manager == null:
+		return false
+	if not settings_manager.has_method("get_value"):
+		return false
+	var policy: String = str(settings_manager.call(
+		"get_value", "cost.dispatch_policy", "warn"))
+	if policy != "hard_block":
+		return false
+	var spent: float = float(cost_tracker.get_total())
+	var limit: float = float(cost_tracker.get_session_limit())
+	return limit > 0.0 and spent >= limit
 
 func parallel_generate(plugin_names: Array, prompt: String, params: Dictionary = {}) -> Array:
 	var ids: Array = plugin_manager.parallel_generate(plugin_names, prompt, params)
