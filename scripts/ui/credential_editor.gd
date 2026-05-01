@@ -401,9 +401,35 @@ func _on_test_connection_pressed(plugin_name: String) -> void:
 	(entry["test_button"] as Button).disabled = true
 	(entry["test_status"] as Label).text = "testing…"
 	(entry["test_status"] as Label).modulate = Color(0.85, 0.85, 0.85, 1.0)
+
+	# Phase 29 (ADR 029): probe-with-typed-key. The user may have
+	# typed a NEW key into the LineEdit but not saved yet. Without
+	# this override, we'd test the OLD saved key — misleading.
+	# Strategy: temporarily mutate the registered plugin's `api_key`
+	# property, restore it after the probe. Plugins without an
+	# `api_key` field (mocks) ignore the typed value, which is
+	# correct — they don't auth against anything.
+	var typed_value: String = (entry["input"] as LineEdit).text.strip_edges()
+	var has_api_key_field: bool = "api_key" in plugin
+	var saved_key: String = ""
+	var did_override: bool = false
+	if has_api_key_field and not typed_value.is_empty():
+		saved_key = str(plugin.api_key)
+		if typed_value != saved_key:
+			plugin.api_key = typed_value
+			did_override = true
+
 	# Await the probe. Synchronous probes (mocks) return immediately;
 	# real plugins do an HTTP round-trip.
 	var result: Dictionary = await plugin.test_connection()
+
+	# Restore the saved key so the registered plugin's state is
+	# unaffected by the test. The user can choose to actually save
+	# the typed value via the editor's Save button — a separate
+	# action.
+	if did_override:
+		plugin.api_key = saved_key
+
 	# The user may have closed the editor / switched contexts in the
 	# interim. Defensive: only paint if the row still exists.
 	if not _rows.has(plugin_name):

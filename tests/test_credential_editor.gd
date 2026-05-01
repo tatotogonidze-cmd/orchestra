@@ -22,11 +22,20 @@ const BasePluginScript = preload("res://scripts/base_plugin.gd")
 # this under the name "claude" via plugin_manager.register_plugin so
 # the credential editor's Test button has a deterministic, in-process
 # probe to call — no real HTTP, no API key needed.
+#
+# `api_key` is declared so the Phase 29 probe-with-typed-key path
+# (which checks `"api_key" in plugin` before override) sees it.
+# `_key_seen_during_test` records the api_key value at the moment
+# test_connection runs — tests use this to verify whether the typed
+# value reached the plugin or only the saved one did.
 class FakeCredentialPlugin extends BasePluginScript:
+	var api_key: String = ""
 	var _test_result: Dictionary = {"success": true, "message": "fake OK"}
 	var _test_calls: int = 0
+	var _key_seen_during_test: String = ""
 
 	func initialize(config: Dictionary) -> Dictionary:
+		api_key = str(config.get("api_key", ""))
 		return {"success": true}
 
 	func health_check() -> Dictionary:
@@ -34,6 +43,7 @@ class FakeCredentialPlugin extends BasePluginScript:
 
 	func test_connection() -> Dictionary:
 		_test_calls += 1
+		_key_seen_during_test = api_key
 		return _test_result
 
 
@@ -482,3 +492,66 @@ func test_mock_audio_test_connection_returns_success():
 	var r: Dictionary = p.test_connection()
 	assert_true(bool(r["success"]), "mock_audio test_connection should pass")
 	assert_true(r.has("message"))
+
+
+# ---------- Probe-with-typed-key (Phase 29 / ADR 029) ----------
+
+func _register_fake_with_saved_key(orch: Node, saved_key: String) -> FakeCredentialPlugin:
+	var fake: FakeCredentialPlugin = FakeCredentialPlugin.new()
+	add_child_autofree(fake)
+	orch.plugin_manager.register_plugin("claude", fake, {"api_key": saved_key})
+	orch.plugin_manager.enable_plugin("claude")
+	return fake
+
+func test_typed_key_overrides_saved_during_probe():
+	# User types a NEW key in the LineEdit but hasn't saved yet.
+	# Test should probe with the typed value, not the registered one.
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var orch: Node = ctx["orch"]
+	var fake: FakeCredentialPlugin = _register_fake_with_saved_key(orch, "saved-key")
+	var ed: Node = _make_editor()
+	ed.bind(orch)
+	ed.show_dialog()
+	# User types a different value.
+	(ed._rows["claude"]["input"] as LineEdit).text = "typed-key"
+	await ed._on_test_connection_pressed("claude")
+	# The fake's test_connection saw the TYPED value.
+	assert_eq(fake._key_seen_during_test, "typed-key",
+		"Phase 29: typed value should reach plugin.test_connection")
+	# After the test, the registered plugin's saved_key is restored.
+	assert_eq(fake.api_key, "saved-key",
+		"saved api_key should be restored after the probe")
+	_remove_path(ctx["path"])
+
+func test_empty_typed_key_falls_back_to_saved():
+	# When the LineEdit is blank, we don't override — the registered
+	# saved key gets tested. This preserves the Phase 22 default
+	# behaviour for users who haven't typed anything.
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var orch: Node = ctx["orch"]
+	var fake: FakeCredentialPlugin = _register_fake_with_saved_key(orch, "saved-key")
+	var ed: Node = _make_editor()
+	ed.bind(orch)
+	ed.show_dialog()
+	# Empty input.
+	(ed._rows["claude"]["input"] as LineEdit).text = ""
+	await ed._on_test_connection_pressed("claude")
+	assert_eq(fake._key_seen_during_test, "saved-key",
+		"empty input should fall back to the registered saved key")
+	_remove_path(ctx["path"])
+
+func test_typed_key_matching_saved_does_not_override():
+	# User typed value happens to match the saved value. No need to
+	# override + restore; we just probe directly.
+	var ctx: Dictionary = _make_orch_with_unlocked_store()
+	var orch: Node = ctx["orch"]
+	var fake: FakeCredentialPlugin = _register_fake_with_saved_key(orch, "same-key")
+	var ed: Node = _make_editor()
+	ed.bind(orch)
+	ed.show_dialog()
+	(ed._rows["claude"]["input"] as LineEdit).text = "same-key"
+	await ed._on_test_connection_pressed("claude")
+	assert_eq(fake._key_seen_during_test, "same-key")
+	# Saved key intact.
+	assert_eq(fake.api_key, "same-key")
+	_remove_path(ctx["path"])

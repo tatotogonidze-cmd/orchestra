@@ -256,6 +256,105 @@ func _check_scalar_ref(
 			owner_label, owner_id, target_label, ref_id])
 
 
+# ---------- Cross-reference auto-fix (Phase 29 / ADR 029) ----------
+
+# Walks the same reference fields as _check_cross_references and
+# removes any entry whose target_id isn't in the appropriate pool.
+# Pure function: takes a GDD, returns a fresh cleaned copy + the
+# count of removals. Caller decides whether to save the result.
+#
+# Useful for: post-chat-edit cleanup, post-form-edit cleanup
+# (rename-with-orphan-refs case), pre-export sanitisation.
+#
+# Returns {success: true, gdd: Dictionary, removed_count: int}.
+# Always succeeds — even a GDD with no references at all returns
+# `removed_count: 0`.
+func clean_dangling_references(gdd: Dictionary) -> Dictionary:
+	# Deep copy so callers can compare before/after.
+	var cleaned: Dictionary = gdd.duplicate(true)
+	var pools: Dictionary = {
+		"mechanics":  _id_pool(cleaned, "mechanics"),
+		"assets":     _id_pool(cleaned, "assets"),
+		"tasks":      _id_pool(cleaned, "tasks"),
+		"scenes":     _id_pool(cleaned, "scenes"),
+		"characters": _id_pool(cleaned, "characters"),
+	}
+	var removed: int = 0
+
+	# mechanics[].dependencies → mechanics
+	for m in _items(cleaned, "mechanics"):
+		removed += _prune_array_refs(m, "dependencies", pools["mechanics"])
+
+	# assets[].parent_asset_id → assets (nullable scalar)
+	for a in _items(cleaned, "assets"):
+		removed += _prune_scalar_ref(a, "parent_asset_id", pools["assets"])
+
+	# tasks[]
+	for t in _items(cleaned, "tasks"):
+		removed += _prune_array_refs(t, "dependencies", pools["tasks"])
+		removed += _prune_array_refs(t, "blocked_by", pools["tasks"])
+		removed += _prune_array_refs(t, "related_asset_ids", pools["assets"])
+		removed += _prune_array_refs(t, "related_mechanic_ids", pools["mechanics"])
+
+	# scenes[]
+	for s in _items(cleaned, "scenes"):
+		removed += _prune_array_refs(s, "related_asset_ids", pools["assets"])
+		# entry_points[].from_scene_id → scenes
+		var ep = s.get("entry_points", [])
+		if ep is Array:
+			for entry in ep:
+				if entry is Dictionary:
+					removed += _prune_scalar_ref(entry, "from_scene_id", pools["scenes"])
+
+	# characters[].asset_id → assets (nullable scalar)
+	for c in _items(cleaned, "characters"):
+		removed += _prune_scalar_ref(c, "asset_id", pools["assets"])
+
+	# dialogues[].character_id → characters (REQUIRED, not nullable —
+	# pruning would leave an invalid record. We still null it out so
+	# validate() flags the record cleanly; the user has to fix it
+	# themselves.)
+	for d in _items(cleaned, "dialogues"):
+		if d.has("character_id") and not pools["characters"].has(str(d["character_id"])):
+			d.erase("character_id")
+			removed += 1
+
+	return {"success": true, "gdd": cleaned, "removed_count": removed}
+
+# Helper: drop dangling entries from an array-of-strings reference
+# field. Returns the count of removed entries.
+func _prune_array_refs(record: Dictionary, ref_field: String,
+		pool: Dictionary) -> int:
+	if not record.has(ref_field):
+		return 0
+	var arr = record[ref_field]
+	if not (arr is Array):
+		return 0
+	var removed: int = 0
+	# Walk back-to-front so removals don't shift remaining indices.
+	for i in range((arr as Array).size() - 1, -1, -1):
+		var ref_id: String = str((arr as Array)[i])
+		if not pool.has(ref_id):
+			(arr as Array).remove_at(i)
+			removed += 1
+	return removed
+
+# Helper: clear a dangling scalar id reference. Removes the key
+# entirely so the field is "absent" rather than "= dangling".
+func _prune_scalar_ref(record: Dictionary, ref_field: String,
+		pool: Dictionary) -> int:
+	if not record.has(ref_field):
+		return 0
+	var v = record[ref_field]
+	if v == null or (v is String and (v as String).is_empty()):
+		return 0
+	var ref_id: String = str(v)
+	if pool.has(ref_id):
+		return 0
+	record.erase(ref_field)
+	return 1
+
+
 # ---------- Persistence ----------
 
 # Named load_gdd to avoid shadowing built-in global load().

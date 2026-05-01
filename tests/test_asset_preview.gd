@@ -406,6 +406,80 @@ func test_show_replaces_previous_renderer():
 		"re-render should leave exactly one child in the content holder")
 
 
+# ---------- Auto-frame AABB (Phase 30 / ADR 030) ----------
+
+func _make_mesh_at(pos: Vector3, size: Vector3) -> MeshInstance3D:
+	# Build a MeshInstance3D with a BoxMesh at the given world
+	# position. Sized to the requested extent so the AABB walk has
+	# something concrete to merge.
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.position = pos
+	return mi
+
+func test_compute_aabb_for_node_returns_empty_when_no_meshes():
+	var root := Node3D.new()
+	add_child_autofree(root)
+	var aabb: AABB = _ed._compute_aabb_for_node(root)
+	assert_almost_eq(aabb.size.length(), 0.0, 0.001,
+		"empty subtree should produce a zero-size AABB")
+
+func test_compute_aabb_for_node_combines_multiple_meshes():
+	var root := Node3D.new()
+	add_child_autofree(root)
+	# Two unit cubes 10 units apart along x.
+	var a := _make_mesh_at(Vector3(0, 0, 0), Vector3.ONE)
+	var b := _make_mesh_at(Vector3(10, 0, 0), Vector3.ONE)
+	root.add_child(a)
+	root.add_child(b)
+	var aabb: AABB = _ed._compute_aabb_for_node(root)
+	# Combined extent should span the two cubes:
+	# x from -0.5 (a's left edge) to 10.5 (b's right edge) = 11
+	assert_almost_eq(aabb.size.x, 11.0, 0.01,
+		"combined AABB should span both meshes; got size: %s" % str(aabb.size))
+
+func test_frame_camera_to_aabb_centers_target_and_sets_distance():
+	# Build a 3d render scaffold so _3d_camera is non-null.
+	var fake_id: String = "frame_aabb"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	# Now apply auto-frame to a known AABB.
+	var target_pos: Vector3 = Vector3(5, 2, -3)
+	var aabb := AABB(target_pos, Vector3(2, 2, 2))
+	_ed._frame_camera_to_aabb(aabb)
+	assert_almost_eq(_ed._3d_target.x, 6.0, 0.01,
+		"target should center on AABB.center; AABB.center.x = 5 + 2/2 = 6")
+	assert_almost_eq(_ed._3d_target.y, 3.0, 0.01)
+	assert_almost_eq(_ed._3d_target.z, -2.0, 0.01)
+	# Distance should be > 0 (proportional to bounding sphere radius).
+	assert_gt(_ed._3d_distance, 0.5,
+		"frame should set a non-trivial camera distance; got: %f"
+			% _ed._3d_distance)
+
+func test_frame_camera_to_aabb_with_zero_size_keeps_default_distance():
+	# Build the 3d scaffolding first.
+	var fake_id: String = "frame_zero"
+	_orch.asset_manager._index[fake_id] = {
+		"id": fake_id, "asset_type": "3d", "format": "glb",
+		"local_path": "%s/x.glb" % _test_root, "size_bytes": 0,
+		"source_plugin": "tripo", "source_task_id": "t",
+		"prompt": "", "cost": 0.0, "created_at": 0,
+	}
+	_ed.show_for_asset(fake_id)
+	# Zero-size AABB at origin (a degenerate case).
+	var aabb := AABB(Vector3.ZERO, Vector3.ZERO)
+	_ed._frame_camera_to_aabb(aabb)
+	assert_almost_eq(_ed._3d_distance, 5.0, 0.01,
+		"zero-size AABB should fall back to the default distance")
+
+
 # ---------- Esc-to-close (Phase 14) ----------
 
 func test_escape_acts_like_close_when_visible():

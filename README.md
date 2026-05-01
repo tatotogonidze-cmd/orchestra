@@ -132,6 +132,8 @@ orchestra/
 - `docs/adrs/026-hard-cost-gating.md` — opt-in dispatch refusal at the limit
 - `docs/adrs/027-header-bar-refactor.md` — split action surface from status footer
 - `docs/adrs/028-ux-polish-pair.md` — reset-to-default per param + scene picker
+- `docs/adrs/029-auto-fix-and-typed-probe.md` — bulk auto-fix dangling refs + typed-key Test
+- `docs/adrs/030-word-diff-and-auto-frame.md` — word-level diff stats + auto-frame model AABB
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

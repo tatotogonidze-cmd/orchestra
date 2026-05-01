@@ -346,6 +346,70 @@ func test_xref_empty_arrays_are_fine():
 			% str(v["errors"]))
 
 
+# ---------- clean_dangling_references (Phase 29 / ADR 029) ----------
+
+func test_clean_dangling_no_changes_on_valid_gdd():
+	var r: Dictionary = gm.clean_dangling_references(_xref_gdd())
+	assert_true(bool(r["success"]))
+	assert_eq(int(r["removed_count"]), 0,
+		"clean shouldn't remove anything from an already-valid GDD")
+
+func test_clean_dangling_removes_array_refs():
+	var g: Dictionary = _xref_gdd()
+	(g["tasks"][1]["dependencies"] as Array).append("task_nope")
+	(g["tasks"][1]["related_asset_ids"] as Array).append("asset_nope")
+	var r: Dictionary = gm.clean_dangling_references(g)
+	assert_true(bool(r["success"]))
+	assert_eq(int(r["removed_count"]), 2,
+		"two dangling array entries should be removed")
+	# Cleaned GDD revalidates.
+	var v: Dictionary = gm.validate(r["gdd"])
+	assert_true(bool(v["valid"]),
+		"cleaned GDD should pass validation; errors: %s" % str(v["errors"]))
+
+func test_clean_dangling_clears_scalar_ref():
+	var g: Dictionary = _xref_gdd()
+	g["assets"][1]["parent_asset_id"] = "asset_nope"
+	var r: Dictionary = gm.clean_dangling_references(g)
+	assert_eq(int(r["removed_count"]), 1)
+	# parent_asset_id key should be erased entirely.
+	var asset: Dictionary = (r["gdd"]["assets"] as Array)[1]
+	assert_false(asset.has("parent_asset_id"),
+		"dangling scalar ref should be erased, not nulled or zero'd")
+
+func test_clean_dangling_does_not_mutate_caller():
+	# Pure function — the original GDD should be unchanged.
+	var g: Dictionary = _xref_gdd()
+	(g["tasks"][1]["dependencies"] as Array).append("task_nope")
+	var original_size: int = (g["tasks"][1]["dependencies"] as Array).size()
+	gm.clean_dangling_references(g)
+	assert_eq((g["tasks"][1]["dependencies"] as Array).size(), original_size,
+		"clean should not mutate the input GDD")
+
+func test_clean_dangling_preserves_unrelated_fields():
+	# Confidence test: cleaning shouldn't touch genres, core_loop,
+	# scalar metadata, etc.
+	var g: Dictionary = _xref_gdd()
+	g["characters"][0]["asset_id"] = "asset_nope"
+	var r: Dictionary = gm.clean_dangling_references(g)
+	var cleaned: Dictionary = r["gdd"]
+	assert_eq(cleaned["game_title"], "XRef")
+	assert_eq((cleaned["genres"] as Array)[0], "RPG")
+	# The character's name should survive even though asset_id was
+	# pruned.
+	assert_eq((cleaned["characters"] as Array)[0]["name"], "Hero")
+
+func test_clean_dangling_handles_multiple_per_record():
+	# Same task with multiple dangling refs in different fields.
+	var g: Dictionary = _xref_gdd()
+	(g["tasks"][1]["dependencies"] as Array).append("task_phantom_a")
+	(g["tasks"][1]["dependencies"] as Array).append("task_phantom_b")
+	(g["tasks"][1]["blocked_by"] as Array).append("task_phantom_c")
+	var r: Dictionary = gm.clean_dangling_references(g)
+	assert_eq(int(r["removed_count"]), 3,
+		"all dangling entries across all fields should be counted")
+
+
 # ---------- Helpers ----------
 
 func _rmdir_recursive(path: String) -> void:

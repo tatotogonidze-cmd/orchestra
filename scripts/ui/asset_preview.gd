@@ -414,8 +414,68 @@ func _render_3d(path: String) -> void:
 				_overlay_3d_message(container, "GLTF produced no scene")
 			else:
 				_3d_subviewport.add_child(scene)
+				# Phase 30 (ADR 030): once the scene is in the tree
+				# (so global_transform is valid for AABB walks), fit
+				# the camera to its bounds.
+				var aabb: AABB = _compute_aabb_for_node(scene)
+				if aabb.size.length() > 0.0:
+					_frame_camera_to_aabb(aabb)
 
 	_current_renderer_type = "3d"
+
+# Phase 30: walk a Node tree and combine every MeshInstance3D's
+# world-space AABB into one bounding box. Returns AABB(zero, zero)
+# if no meshes are found — caller should check before framing.
+func _compute_aabb_for_node(root: Node) -> AABB:
+	var combined: AABB = AABB()
+	var has_any: bool = false
+	for mesh_node in _walk_meshes(root):
+		var mi: MeshInstance3D = mesh_node as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		# Mesh AABB in local space; transform to world via the
+		# node's global transform.
+		var local: AABB = mi.mesh.get_aabb()
+		var world: AABB = mi.global_transform * local
+		if not has_any:
+			combined = world
+			has_any = true
+		else:
+			combined = combined.merge(world)
+	return combined
+
+# Recursively gather every MeshInstance3D under `node`. Yields a flat
+# Array because GDScript doesn't have first-class generators.
+func _walk_meshes(node: Node) -> Array:
+	var out: Array = []
+	if node is MeshInstance3D:
+		out.append(node)
+	for child in node.get_children():
+		out.append_array(_walk_meshes(child))
+	return out
+
+# Phase 30: position the orbital camera so the AABB fits in view.
+# Distance is computed from the bounding sphere radius and the
+# camera's vertical FOV. We add a 1.5x padding so the model isn't
+# pressed against the viewport edges.
+func _frame_camera_to_aabb(aabb: AABB) -> void:
+	if _3d_camera == null:
+		return
+	_3d_target = aabb.get_center()
+	# Bounding-sphere radius from the AABB's diagonal.
+	var radius: float = aabb.size.length() * 0.5
+	if radius <= 0.0:
+		# Single-point or empty AABB — leave default distance.
+		_3d_distance = 5.0
+		_update_3d_camera()
+		return
+	# Camera3D.fov is in degrees, vertical. Compute the distance such
+	# that the bounding sphere subtends fov/2 from the camera.
+	var fov_rad: float = deg_to_rad(_3d_camera.fov)
+	var distance: float = radius / sin(fov_rad * 0.5)
+	# Padding so the model sits comfortably inside the viewport.
+	_3d_distance = max(0.5, distance * 1.5)
+	_update_3d_camera()
 
 # Recompute camera position from spherical orbital state. Called on
 # initial render and after every input event that mutates the angles.

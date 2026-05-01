@@ -454,6 +454,59 @@ func test_approve_writes_two_snapshots():
 	assert_eq(_panel._current_gdd["game_title"], "Approved Title")
 
 
+# ---------- Auto-fix cross-refs (Phase 29 / ADR 029) ----------
+
+# Helper: build a minimal GDD with one dangling task dependency.
+func _gdd_with_dangling_ref() -> Dictionary:
+	var g: Dictionary = _minimal_gdd()
+	# minimal_gdd has tasks: [{id: task_intro, ...}]. Append a
+	# dangling dependency so clean_dangling_references has work to do.
+	(g["tasks"] as Array)[0]["dependencies"] = ["task_phantom"]
+	return g
+
+func test_autofix_button_hidden_for_clean_gdd():
+	var path: String = _write_gdd(_minimal_gdd())
+	_panel.show_dialog()
+	_panel._path_input.text = path
+	_panel._on_load_pressed()
+	assert_false(_panel._autofix_button.visible,
+		"clean GDD should not surface the Auto-fix button")
+
+func test_autofix_button_shown_with_count_when_refs_dangle():
+	var path: String = _write_gdd(_gdd_with_dangling_ref())
+	_panel.show_dialog()
+	_panel._path_input.text = path
+	_panel._on_load_pressed()
+	assert_true(_panel._autofix_button.visible,
+		"GDD with dangling refs should surface the Auto-fix button")
+	assert_true("(1)" in _panel._autofix_button.text,
+		"button label should advertise the fix count; got: %s"
+			% _panel._autofix_button.text)
+
+func test_autofix_pressed_cleans_and_saves():
+	var path: String = _write_gdd(_gdd_with_dangling_ref())
+	_panel.show_dialog()
+	_panel._path_input.text = path
+	_panel._on_load_pressed()
+	# Sanity: the in-memory GDD has the dangling ref.
+	assert_eq((_panel._current_gdd["tasks"][0]["dependencies"] as Array).size(), 1)
+	_panel._on_autofix_pressed()
+	# After auto-fix, the dependency array should be empty.
+	assert_eq((_panel._current_gdd["tasks"][0]["dependencies"] as Array).size(), 0,
+		"auto-fix should prune the dangling dependency")
+	# Status surfaces the count.
+	assert_true("removed 1" in _panel._status_label.text,
+		"status should call out the removed count; got: %s"
+			% _panel._status_label.text)
+	# Disk reflects the clean GDD now.
+	var loaded: Dictionary = _orch.gdd_manager.load_gdd(path)
+	assert_eq((loaded["gdd"]["tasks"][0]["dependencies"] as Array).size(), 0,
+		"on-disk GDD should be the cleaned version")
+	# Button hides since there's nothing left to fix.
+	assert_false(_panel._autofix_button.visible,
+		"Auto-fix button should hide once all refs are clean")
+
+
 # ---------- Settings persistence (Phase 24) ----------
 
 func test_load_persists_path_to_settings():
@@ -576,6 +629,72 @@ func test_diff_empty_after():
 		"the empty-string line in after becomes 'added' when before has content")
 	for m in (marks["before_marks"] as Array):
 		assert_eq(str(m), "removed")
+
+func test_word_diff_identical_inputs_returns_zero():
+	var d: Dictionary = _panel._compute_word_diff(
+		"the quick brown fox",
+		"the quick brown fox")
+	assert_eq(int(d["removed"]), 0,
+		"identical inputs should produce no removed words")
+	assert_eq(int(d["added"]), 0)
+	assert_eq(int(d["common"]), 4)
+
+func test_word_diff_pure_addition():
+	var d: Dictionary = _panel._compute_word_diff(
+		"hello",
+		"hello world")
+	assert_eq(int(d["removed"]), 0)
+	assert_eq(int(d["added"]), 1,
+		"only 'world' was added; common is 'hello'")
+	assert_eq(int(d["common"]), 1)
+
+func test_word_diff_pure_removal():
+	var d: Dictionary = _panel._compute_word_diff(
+		"alpha beta gamma",
+		"alpha gamma")
+	assert_eq(int(d["removed"]), 1,
+		"'beta' was removed")
+	assert_eq(int(d["added"]), 0)
+	assert_eq(int(d["common"]), 2)
+
+func test_word_diff_replacement():
+	var d: Dictionary = _panel._compute_word_diff(
+		"the cat sat on the mat",
+		"the dog sat on the rug")
+	# Common: the, sat, on, the (4)
+	# Removed: cat, mat (2). Added: dog, rug (2).
+	assert_eq(int(d["removed"]), 2)
+	assert_eq(int(d["added"]), 2)
+	assert_eq(int(d["common"]), 4)
+
+func test_word_diff_empty_inputs():
+	var d: Dictionary = _panel._compute_word_diff("", "")
+	assert_eq(int(d["removed"]), 0)
+	assert_eq(int(d["added"]), 0)
+	assert_eq(int(d["common"]), 0)
+
+func test_word_diff_handles_newlines_and_tabs():
+	# Whitespace runs (newlines, tabs, multiple spaces) should
+	# all behave as token separators.
+	var d: Dictionary = _panel._compute_word_diff(
+		"a\nb\tc  d",
+		"a c d e")
+	# Tokens before: a b c d. Tokens after: a c d e.
+	# Common: a c d (3). Removed: b. Added: e.
+	assert_eq(int(d["removed"]), 1)
+	assert_eq(int(d["added"]), 1)
+	assert_eq(int(d["common"]), 3)
+
+func test_summary_includes_word_diff_when_content_changes():
+	var before: Dictionary = _minimal_gdd()
+	var after: Dictionary = before.duplicate(true)
+	# Edit the goal field — a structural-summary "no change"
+	# (entity counts unchanged) but a word-level "yes change".
+	(after["core_loop"] as Dictionary)["goal"] = "totally different goal"
+	var s: String = _panel._compute_diff_summary(before, after)
+	assert_true("words: -" in s and "+" in s,
+		"summary should append word-diff stats; got: %s" % s)
+
 
 func test_diff_mixed_changes():
 	# a, b, c, d → a, X, c, Y, d

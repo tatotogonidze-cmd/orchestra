@@ -68,6 +68,10 @@ var _path_input: LineEdit
 var _load_button: Button
 var _edit_button: Button
 var _status_label: Label
+# Phase 29 (ADR 029): "Auto-fix" affordance, visible only when the
+# currently-loaded GDD has dangling cross-references. One click runs
+# clean_dangling_references + save_gdd.
+var _autofix_button: Button
 var _summary_label: Label
 var _entities_container: VBoxContainer
 var _snapshots_header: Label
@@ -197,12 +201,27 @@ func _ready() -> void:
 	_edit_button.pressed.connect(_on_edit_pressed)
 	path_row.add_child(_edit_button)
 
-	# Status / error feedback.
+	# Status / error feedback. The Auto-fix button (Phase 29 / ADR
+	# 029) sits next to the label and surfaces only when the loaded
+	# GDD has cross-reference issues — a click runs
+	# clean_dangling_references + save_gdd.
+	var status_row := HBoxContainer.new()
+	status_row.add_theme_constant_override("separation", 6)
+	_vbox.add_child(status_row)
+
 	_status_label = Label.new()
 	_status_label.text = "(no GDD loaded yet)"
 	_status_label.modulate = Color(0.85, 0.85, 0.85, 1.0)
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_vbox.add_child(_status_label)
+	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_row.add_child(_status_label)
+
+	_autofix_button = Button.new()
+	_autofix_button.text = "Auto-fix"
+	_autofix_button.tooltip_text = "Remove dangling cross-references and save the cleaned GDD"
+	_autofix_button.visible = false
+	_autofix_button.pressed.connect(_on_autofix_pressed)
+	status_row.add_child(_autofix_button)
 
 	# Summary of top-level fields. Single Label, multi-line.
 	_summary_label = Label.new()
@@ -584,8 +603,58 @@ func _on_load_pressed() -> void:
 	# A fresh load wipes any pending chat-edit — the diff would be
 	# meaningful only against the GDD we computed it from.
 	_clear_pending_edit()
+	# Phase 29: surface Auto-fix only when we can actually fix
+	# something. Probe the GDD for dangling refs WITHOUT mutating —
+	# clean_dangling_references is a pure function so we just check
+	# the count.
+	_refresh_autofix_visibility()
 	_refresh()
 	emit_signal("gdd_loaded", path)
+
+# Probe the loaded GDD for dangling cross-refs and toggle the
+# Auto-fix button visibility accordingly. Re-probes after every
+# load / rollback / chat-edit-applied / form-save.
+func _refresh_autofix_visibility() -> void:
+	if _autofix_button == null:
+		return
+	if _orch == null or _orch.gdd_manager == null \
+			or _current_gdd.is_empty():
+		_autofix_button.visible = false
+		return
+	var preview: Dictionary = _orch.gdd_manager.clean_dangling_references(_current_gdd)
+	var n: int = int(preview.get("removed_count", 0))
+	if n > 0:
+		_autofix_button.text = "Auto-fix (%d)" % n
+		_autofix_button.visible = true
+	else:
+		_autofix_button.visible = false
+
+# Auto-fix click handler. Runs clean_dangling_references on the
+# currently-loaded GDD, then save_gdd to commit the cleaned version
+# (which also creates a fresh snapshot — same rollback discipline
+# as every other write).
+func _on_autofix_pressed() -> void:
+	if _orch == null or _orch.gdd_manager == null:
+		return
+	if _current_gdd.is_empty() or _current_gdd_path.is_empty():
+		return
+	var cleaned: Dictionary = _orch.gdd_manager.clean_dangling_references(_current_gdd)
+	if not bool(cleaned.get("success", false)):
+		_status_label.text = "Auto-fix failed: %s" % str(cleaned.get("error", "unknown"))
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	var n: int = int(cleaned.get("removed_count", 0))
+	var new_gdd: Dictionary = cleaned["gdd"] as Dictionary
+	var save: Dictionary = _orch.gdd_manager.save_gdd(new_gdd, _current_gdd_path)
+	if not bool(save.get("success", false)):
+		_status_label.text = "Auto-fix save failed: %s" % str(save.get("error", "unknown"))
+		_status_label.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	_current_gdd = new_gdd
+	_status_label.text = "Auto-fix removed %d dangling reference(s)" % n
+	_status_label.modulate = Color(0.5, 0.9, 0.5, 1.0)
+	_refresh_autofix_visibility()
+	_refresh()
 
 func _on_rollback_pressed(version: int) -> void:
 	if _orch == null or _orch.gdd_manager == null:
@@ -854,8 +923,9 @@ func _apply_line_marks(view: TextEdit, marks: Array, target_kind: String,
 
 
 # Cheap, semantic-ish summary: per-entity-array count delta + a hint
-# when top-level fields changed. We don't do a real diff — pretty-
-# printed JSON in side-by-side TextEdits handles the detail view.
+# when top-level fields changed + a word-diff suffix (Phase 30 / ADR
+# 030) so the user sees how much PROSE changed even when only one
+# field's text was edited.
 func _compute_diff_summary(before: Dictionary, after: Dictionary) -> String:
 	var lines: Array = []
 	for key in _ENTITY_KEYS:
@@ -869,9 +939,86 @@ func _compute_diff_summary(before: Dictionary, after: Dictionary) -> String:
 	for key in ["game_title", "genres", "core_loop"]:
 		if before.get(key, null) != after.get(key, null):
 			lines.append("~%s" % key)
+	# Phase 30: append word-diff stats. Operates on the pretty-printed
+	# JSON so it captures intra-line edits the structural list above
+	# doesn't (e.g. tweaking a description string).
+	var before_text: String = JSON.stringify(before, "  ")
+	var after_text: String = JSON.stringify(after, "  ")
+	var word_stats: Dictionary = _compute_word_diff(before_text, after_text)
+	var removed: int = int(word_stats.get("removed", 0))
+	var added: int = int(word_stats.get("added", 0))
+	var word_suffix: String = ""
+	if removed > 0 or added > 0:
+		word_suffix = " — words: -%d +%d" % [removed, added]
 	if lines.is_empty():
-		return "No structural changes (entity counts unchanged, top-level fields identical)"
-	return "Changes: " + ", ".join(lines)
+		return "No structural changes (entity counts unchanged, top-level fields identical)%s" % word_suffix
+	return "Changes: " + ", ".join(lines) + word_suffix
+
+
+# Word-granularity diff (Phase 30 / ADR 030). Reuses the same DP-LCS
+# shape as `_compute_line_diff` but at whitespace-token granularity.
+# Splits both texts on any whitespace run (so newlines, multiple
+# spaces, tabs all behave the same) and counts how many tokens are
+# unique to before vs after.
+#
+# Returns:
+#   {
+#     "removed": int,   # words in before that don't appear in the LCS
+#     "added":   int,   # words in after  that don't appear in the LCS
+#     "common":  int,   # LCS length
+#   }
+#
+# Performance: O(N*M) DP, same caveat as line diff — fine for any
+# JSON document a human is going to author.
+func _compute_word_diff(before_text: String, after_text: String) -> Dictionary:
+	# `split` with maxsplit=0 behaves like Python's str.split() with
+	# no separator: collapses any whitespace run.
+	var a_words: PackedStringArray = before_text.split(" ", false)
+	var b_words: PackedStringArray = after_text.split(" ", false)
+	# Strip empty tokens that escape the above (newlines, etc).
+	var a: Array = _flatten_whitespace_tokens(a_words)
+	var b: Array = _flatten_whitespace_tokens(b_words)
+	var n: int = a.size()
+	var m: int = b.size()
+	if n == 0 and m == 0:
+		return {"removed": 0, "added": 0, "common": 0}
+	var stride: int = m + 1
+	var dp: PackedInt32Array = PackedInt32Array()
+	dp.resize((n + 1) * stride)
+	for i in range(1, n + 1):
+		for j in range(1, m + 1):
+			if a[i - 1] == b[j - 1]:
+				dp[i * stride + j] = dp[(i - 1) * stride + (j - 1)] + 1
+			else:
+				var up: int = dp[(i - 1) * stride + j]
+				var left: int = dp[i * stride + (j - 1)]
+				dp[i * stride + j] = up if up >= left else left
+	var common: int = dp[n * stride + m]
+	return {
+		"removed": n - common,
+		"added":   m - common,
+		"common":  common,
+	}
+
+# Helper: split each string-with-whitespace token further so the
+# diff actually compares words. Without this, "a\nb" gets treated as
+# one token because split(" ") doesn't split on newlines.
+func _flatten_whitespace_tokens(tokens: PackedStringArray) -> Array:
+	var out: Array = []
+	for t in tokens:
+		var stripped: String = (t as String).strip_edges()
+		if stripped.is_empty():
+			continue
+		# Split further on any embedded whitespace.
+		for piece in stripped.split("\n", false):
+			var p: String = (piece as String).strip_edges()
+			if not p.is_empty():
+				# Tabs and other whitespace inside `p` — split them too.
+				for w in p.split("\t", false):
+					var wt: String = (w as String).strip_edges()
+					if not wt.is_empty():
+						out.append(wt)
+	return out
 
 
 # Approve flow — write a snapshot of the current state, then save the
