@@ -507,6 +507,88 @@ func test_escape_is_noop_when_hidden():
 	assert_signal_not_emitted(_ed, "closed")
 
 
+# ---------- Metadata editor (Phase 43 / ADR 043) ----------
+
+func _ingest_simple_text() -> String:
+	var r: Dictionary = await _orch.asset_manager.ingest(
+		"claude", "claude:meta-%d" % randi(),
+		{"asset_type": "text", "format": "plain", "text": "edit me"},
+		"original prompt")
+	return str(r["asset_id"])
+
+func test_metadata_editor_builds_inputs():
+	# Members exist after _ready, regardless of whether an asset is shown.
+	assert_not_null(_ed._display_name_input, "_display_name_input not built")
+	assert_not_null(_ed._tags_input, "_tags_input not built")
+	assert_not_null(_ed._prompt_input, "_prompt_input not built")
+	assert_not_null(_ed._meta_save_button, "_meta_save_button not built")
+
+func test_metadata_editor_prefills_on_show():
+	var aid: String = await _ingest_simple_text()
+	_orch.asset_manager.update_asset_metadata(aid, {
+		"display_name": "Greeting",
+		"tags": ["intro", "hero"],
+	})
+	_ed.show_for_asset(aid)
+	assert_eq(_ed._display_name_input.text, "Greeting",
+		"display_name should be pre-filled from the asset record")
+	assert_eq(_ed._tags_input.text, "intro, hero",
+		"tags should be comma-joined for editing")
+	assert_eq(_ed._prompt_input.text, "original prompt",
+		"prompt should be pre-filled")
+
+func test_metadata_save_persists_changes():
+	var aid: String = await _ingest_simple_text()
+	_ed.show_for_asset(aid)
+	_ed._display_name_input.text = "Renamed"
+	_ed._tags_input.text = "alpha, beta, gamma"
+	_ed._prompt_input.text = "fixed typo prompt"
+	_ed._on_meta_save_pressed()
+	# Verify via direct asset_manager read — round-trips the edit
+	# through the disk + signal pipeline.
+	var fetched: Dictionary = _orch.asset_manager.get_asset(aid)
+	assert_eq(str(fetched["display_name"]), "Renamed")
+	assert_eq((fetched["tags"] as Array).size(), 3,
+		"three tags should land in the asset record")
+	assert_eq(str(fetched["prompt"]), "fixed typo prompt")
+
+func test_metadata_save_status_label_announces_success():
+	var aid: String = await _ingest_simple_text()
+	_ed.show_for_asset(aid)
+	_ed._display_name_input.text = "Foo"
+	_ed._on_meta_save_pressed()
+	assert_eq(_ed._meta_save_status.text, "Saved",
+		"status label should announce success after _on_meta_save_pressed")
+
+func test_metadata_save_handles_empty_tags():
+	# Empty input → empty tags array (not [""]).
+	var aid: String = await _ingest_simple_text()
+	_ed.show_for_asset(aid)
+	_ed._tags_input.text = ""
+	_ed._on_meta_save_pressed()
+	var fetched: Dictionary = _orch.asset_manager.get_asset(aid)
+	assert_eq((fetched["tags"] as Array).size(), 0,
+		"empty tags input should produce empty array, not [\"\"]")
+
+func test_metadata_save_strips_tag_whitespace():
+	var aid: String = await _ingest_simple_text()
+	_ed.show_for_asset(aid)
+	_ed._tags_input.text = "  spaced  ,trim   ,  done"
+	_ed._on_meta_save_pressed()
+	var fetched: Dictionary = _orch.asset_manager.get_asset(aid)
+	var tags: Array = fetched["tags"] as Array
+	assert_eq(tags.size(), 3)
+	assert_true(tags.has("spaced"))
+	assert_true(tags.has("trim"))
+	assert_true(tags.has("done"))
+
+func test_metadata_save_without_asset_does_not_crash():
+	# Defensive: pressing Save before an asset is selected.
+	_ed._on_meta_save_pressed()
+	assert_true("no asset" in _ed._meta_save_status.text,
+		"status should guide the user; got: %s" % _ed._meta_save_status.text)
+
+
 # ---------- Cleanup helpers (copied from test_asset_manager) ----------
 
 func _rm_rf(absolute_dir: String) -> void:

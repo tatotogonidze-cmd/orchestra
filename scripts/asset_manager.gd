@@ -33,6 +33,10 @@ const BasePluginScript = preload("res://scripts/base_plugin.gd")
 signal asset_ingested(asset_id: String, asset: Dictionary)
 signal asset_deleted(asset_id: String)
 signal asset_ingest_failed(source_task_id: String, error: Dictionary)
+# Phase 43 (ADR 043): emitted after update_asset_metadata persists
+# changes. Asset gallery / preview subscribe to refresh when
+# display_name or tags change.
+signal asset_updated(asset_id: String, asset: Dictionary)
 
 const DEFAULT_ROOT: String = "user://assets"
 const INDEX_FILENAME: String = "index.json"
@@ -106,6 +110,54 @@ func list_assets(filter: Dictionary = {}) -> Array:
 
 # Remove an asset from disk and from the index. Returns true iff the metadata
 # row existed (whether or not the file still existed at delete time).
+# Phase 43 (ADR 043): update mutable fields on an asset record.
+#
+# Only whitelisted keys can be changed: anything that would alter
+# the asset's identity (asset_id, content_hash, local_path,
+# asset_type, source_plugin, created_at, size_bytes, format) is
+# silently ignored — those define the asset, not its presentation.
+#
+# Whitelisted fields:
+#   - display_name : human-readable label (defaults to "" — falls
+#                    back to asset_id in UI when empty).
+#   - tags         : Array of strings. Free-form taxonomy.
+#   - prompt       : the originating prompt text. Editable so users
+#                    can correct typos without losing the asset.
+#
+# Returns {success: bool, error?: String, asset?: Dictionary}.
+const _UPDATABLE_FIELDS: Array = ["display_name", "tags", "prompt"]
+
+func update_asset_metadata(asset_id: String, updates: Dictionary) -> Dictionary:
+	if not _index.has(asset_id):
+		return {"success": false, "error": "unknown asset_id: %s" % asset_id}
+	var row: Dictionary = _index[asset_id]
+	# Validate types up-front so partial updates don't half-apply.
+	if updates.has("tags"):
+		var t = updates["tags"]
+		if not (t is Array):
+			return {"success": false, "error": "tags must be an Array of strings"}
+		for tag in (t as Array):
+			if not (tag is String):
+				return {"success": false, "error": "tags entries must be strings"}
+	if updates.has("display_name"):
+		var dn = updates["display_name"]
+		if not (dn is String):
+			return {"success": false, "error": "display_name must be a String"}
+	if updates.has("prompt"):
+		var pr = updates["prompt"]
+		if not (pr is String):
+			return {"success": false, "error": "prompt must be a String"}
+	# Apply whitelist. Non-listed keys are silently dropped — caller
+	# may have passed the full asset dict; we only touch the fields
+	# we own.
+	for key in _UPDATABLE_FIELDS:
+		if updates.has(key):
+			row[key] = updates[key]
+	_persist_index()
+	emit_signal("asset_updated", asset_id, row)
+	return {"success": true, "asset": row}
+
+
 func delete_asset(asset_id: String) -> bool:
 	if not _index.has(asset_id):
 		return false

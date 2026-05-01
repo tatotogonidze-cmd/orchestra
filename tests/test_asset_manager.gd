@@ -206,6 +206,95 @@ func test_asset_deleted_signal_fires():
 	assert_signal_emitted(am, "asset_deleted")
 
 
+# ---------- update_asset_metadata (Phase 43 / ADR 043) ----------
+
+func _ingest_one_text() -> String:
+	# Helper: ingest a small text asset and return its asset_id.
+	var r: Dictionary = await am.ingest("mock_text", "tid-meta-%d" % randi(),
+		{"asset_type": "text", "format": "plain", "text": "hello"},
+		"original prompt")
+	return str(r["asset_id"])
+
+func test_update_metadata_unknown_id_fails():
+	var r: Dictionary = am.update_asset_metadata("asset_does_not_exist",
+		{"display_name": "x"})
+	assert_false(bool(r["success"]))
+	assert_true("unknown asset_id" in str(r.get("error", "")))
+
+func test_update_metadata_persists_display_name():
+	var aid: String = await _ingest_one_text()
+	var r: Dictionary = am.update_asset_metadata(aid,
+		{"display_name": "Hero Greeting"})
+	assert_true(bool(r["success"]))
+	var fetched: Dictionary = am.get_asset(aid)
+	assert_eq(str(fetched["display_name"]), "Hero Greeting",
+		"display_name should round-trip via get_asset")
+
+func test_update_metadata_persists_tags():
+	var aid: String = await _ingest_one_text()
+	var r: Dictionary = am.update_asset_metadata(aid,
+		{"tags": ["intro", "voice"]})
+	assert_true(bool(r["success"]))
+	var fetched: Dictionary = am.get_asset(aid)
+	assert_eq((fetched["tags"] as Array).size(), 2)
+	assert_true((fetched["tags"] as Array).has("intro"))
+
+func test_update_metadata_persists_prompt_change():
+	var aid: String = await _ingest_one_text()
+	am.update_asset_metadata(aid, {"prompt": "corrected prompt"})
+	var fetched: Dictionary = am.get_asset(aid)
+	assert_eq(str(fetched["prompt"]), "corrected prompt",
+		"prompt edits should round-trip")
+
+func test_update_metadata_rejects_invalid_tag_type():
+	var aid: String = await _ingest_one_text()
+	var r: Dictionary = am.update_asset_metadata(aid,
+		{"tags": "not an array"})
+	assert_false(bool(r["success"]))
+	assert_true("tags" in str(r.get("error", "")))
+
+func test_update_metadata_rejects_non_string_tag_entry():
+	var aid: String = await _ingest_one_text()
+	var r: Dictionary = am.update_asset_metadata(aid,
+		{"tags": ["valid", 42]})
+	assert_false(bool(r["success"]))
+
+func test_update_metadata_silently_drops_immutable_fields():
+	# asset_type, content_hash, local_path all stay immutable. The
+	# update should succeed and ignore those keys.
+	var aid: String = await _ingest_one_text()
+	var orig_type: String = str(am.get_asset(aid).get("asset_type", ""))
+	var r: Dictionary = am.update_asset_metadata(aid, {
+		"asset_type":   "image",        # ignored
+		"content_hash": "00000000",     # ignored
+		"local_path":   "user://hack.txt",  # ignored
+		"display_name": "Renamed",      # accepted
+	})
+	assert_true(bool(r["success"]))
+	var fetched: Dictionary = am.get_asset(aid)
+	assert_eq(str(fetched["asset_type"]), orig_type,
+		"asset_type should NOT be overwritten")
+	assert_eq(str(fetched["display_name"]), "Renamed",
+		"whitelisted field should still apply")
+
+func test_update_metadata_emits_asset_updated_signal():
+	var aid: String = await _ingest_one_text()
+	watch_signals(am)
+	am.update_asset_metadata(aid, {"display_name": "labelled"})
+	assert_signal_emitted(am, "asset_updated",
+		"successful update should emit asset_updated")
+
+func test_update_metadata_persists_to_disk():
+	var aid: String = await _ingest_one_text()
+	am.update_asset_metadata(aid, {"display_name": "stamped"})
+	# Re-configure (forces a fresh _load_index) and verify the
+	# change survived.
+	am.configure(test_root)
+	var fetched: Dictionary = am.get_asset(aid)
+	assert_eq(str(fetched["display_name"]), "stamped",
+		"metadata edits should persist to the index file")
+
+
 # ---------- test helpers ----------
 
 func _write_file(path: String, bytes: PackedByteArray) -> void:

@@ -150,6 +150,7 @@ orchestra/
 - `docs/adrs/040-form-edit-enum-constraints.md` — OptionButton rendering for schema-enum fields
 - `docs/adrs/041-markdown-copy-to-clipboard.md` — Copy .md button + markdown_copied signal
 - `docs/adrs/042-mock-text-plugin.md` — closes real+mock symmetry across all 4 asset categories
+- `docs/adrs/043-asset-metadata-editor.md` — editable display_name / tags / prompt + asset_updated signal
 - `docs/plugins.md` — field guide for adding new provider plugins
 
 ## Integration smoke tests (real APIs)

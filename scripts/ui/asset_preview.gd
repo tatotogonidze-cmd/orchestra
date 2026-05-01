@@ -49,6 +49,15 @@ var _body_hbox: HBoxContainer
 var _content_holder: PanelContainer
 var _metadata_panel: PanelContainer
 var _metadata_label: Label
+# Phase 43 (ADR 043): in-place editor for whitelisted metadata fields.
+# Lives in the metadata panel below the read-only summary; rebuilds
+# its contents on each show_for_asset.
+var _meta_edit_section: VBoxContainer
+var _display_name_input: LineEdit
+var _tags_input: LineEdit
+var _prompt_input: TextEdit
+var _meta_save_button: Button
+var _meta_save_status: Label
 var _footer: HBoxContainer
 var _close_button: Button
 var _delete_button: Button
@@ -133,15 +142,74 @@ func _ready() -> void:
 	_body_hbox.add_child(_content_holder)
 
 	_metadata_panel = PanelContainer.new()
-	_metadata_panel.custom_minimum_size = Vector2(240, 0)
+	_metadata_panel.custom_minimum_size = Vector2(280, 0)
 	_metadata_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body_hbox.add_child(_metadata_panel)
+
+	# Metadata panel: read-only summary on top, edit form below.
+	# Wrapping in a VBox lets both share the panel's vertical real
+	# estate without a hard split.
+	var meta_vbox := VBoxContainer.new()
+	meta_vbox.add_theme_constant_override("separation", 8)
+	_metadata_panel.add_child(meta_vbox)
 
 	_metadata_label = Label.new()
 	_metadata_label.text = ""
 	_metadata_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_metadata_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	_metadata_panel.add_child(_metadata_label)
+	meta_vbox.add_child(_metadata_label)
+
+	# Phase 43 (ADR 043): in-place metadata editor.
+	_meta_edit_section = VBoxContainer.new()
+	_meta_edit_section.add_theme_constant_override("separation", 4)
+	meta_vbox.add_child(_meta_edit_section)
+
+	var edit_header := Label.new()
+	edit_header.text = "Edit"
+	edit_header.add_theme_font_size_override("font_size", 12)
+	edit_header.modulate = Color(0.7, 0.7, 0.7, 1.0)
+	_meta_edit_section.add_child(edit_header)
+
+	var name_label := Label.new()
+	name_label.text = "Display name"
+	name_label.modulate = Color(0.7, 0.7, 0.7, 1.0)
+	_meta_edit_section.add_child(name_label)
+	_display_name_input = LineEdit.new()
+	_display_name_input.placeholder_text = "(falls back to asset_id when blank)"
+	_meta_edit_section.add_child(_display_name_input)
+
+	var tags_label := Label.new()
+	tags_label.text = "Tags (comma-separated)"
+	tags_label.modulate = Color(0.7, 0.7, 0.7, 1.0)
+	_meta_edit_section.add_child(tags_label)
+	_tags_input = LineEdit.new()
+	_tags_input.placeholder_text = "e.g. hero, weapon, draft"
+	_meta_edit_section.add_child(_tags_input)
+
+	var prompt_label := Label.new()
+	prompt_label.text = "Prompt"
+	prompt_label.modulate = Color(0.7, 0.7, 0.7, 1.0)
+	_meta_edit_section.add_child(prompt_label)
+	_prompt_input = TextEdit.new()
+	_prompt_input.custom_minimum_size = Vector2(0, 60)
+	_prompt_input.placeholder_text = "(originating prompt)"
+	_meta_edit_section.add_child(_prompt_input)
+
+	var meta_actions := HBoxContainer.new()
+	meta_actions.alignment = BoxContainer.ALIGNMENT_END
+	_meta_edit_section.add_child(meta_actions)
+
+	_meta_save_status = Label.new()
+	_meta_save_status.text = ""
+	_meta_save_status.modulate = Color(0.6, 0.6, 0.6, 1.0)
+	_meta_save_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	meta_actions.add_child(_meta_save_status)
+
+	_meta_save_button = Button.new()
+	_meta_save_button.text = "Save metadata"
+	_meta_save_button.tooltip_text = "Persist display_name + tags + prompt to the asset record"
+	_meta_save_button.pressed.connect(_on_meta_save_pressed)
+	meta_actions.add_child(_meta_save_button)
 
 	# Footer.
 	_footer = HBoxContainer.new()
@@ -196,6 +264,17 @@ func show_for_asset(asset_id: String) -> void:
 		str(asset.get("asset_type", "?")).to_upper(),
 		str(asset.get("format", "?"))]
 	_metadata_label.text = _format_metadata(asset)
+	# Phase 43 (ADR 043): pre-fill the editor with the current
+	# values. Show empty placeholders for unset fields rather than
+	# the literal "null".
+	_display_name_input.text = str(asset.get("display_name", ""))
+	var tags_arr = asset.get("tags", [])
+	if tags_arr is Array:
+		_tags_input.text = ", ".join(tags_arr)
+	else:
+		_tags_input.text = ""
+	_prompt_input.text = str(asset.get("prompt", ""))
+	_meta_save_status.text = ""
 
 	var asset_type: String = str(asset.get("asset_type", ""))
 	var path: String = str(asset.get("local_path", ""))
@@ -578,6 +657,46 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key.pressed and not key.echo and key.keycode == KEY_ESCAPE:
 			get_viewport().set_input_as_handled()
 			_on_close_pressed()
+
+# Phase 43 (ADR 043): persist whitelisted metadata edits.
+# display_name (string), tags (Array of strings, comma-separated
+# in the LineEdit), prompt (string). Asset_type / path / format
+# stay immutable — those define the asset.
+func _on_meta_save_pressed() -> void:
+	if _orch == null or _orch.asset_manager == null:
+		_meta_save_status.text = "no asset_manager bound"
+		_meta_save_status.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	if _current_asset_id.is_empty():
+		_meta_save_status.text = "no asset selected"
+		_meta_save_status.modulate = Color(1.0, 0.7, 0.2, 1.0)
+		return
+	# Parse tags: comma-separated, trim each entry, drop empties.
+	var raw_tags: String = _tags_input.text
+	var tags: Array = []
+	for t in raw_tags.split(",", false):
+		var trimmed: String = (t as String).strip_edges()
+		if not trimmed.is_empty():
+			tags.append(trimmed)
+	var updates: Dictionary = {
+		"display_name": _display_name_input.text.strip_edges(),
+		"tags":         tags,
+		"prompt":       _prompt_input.text,  # don't strip — leading/trailing whitespace may be intentional
+	}
+	var r: Dictionary = _orch.asset_manager.update_asset_metadata(
+		_current_asset_id, updates)
+	if not bool(r.get("success", false)):
+		_meta_save_status.text = "Save failed: %s" % str(r.get("error", "unknown"))
+		_meta_save_status.modulate = Color(1.0, 0.45, 0.45, 1.0)
+		return
+	# Refresh the read-only summary so the changes are visible
+	# in the Label too (saves the user a round-trip through close
+	# + reopen).
+	var asset: Dictionary = _orch.asset_manager.get_asset(_current_asset_id)
+	if not asset.is_empty():
+		_metadata_label.text = _format_metadata(asset)
+	_meta_save_status.text = "Saved"
+	_meta_save_status.modulate = Color(0.5, 0.9, 0.5, 1.0)
 
 func _on_delete_pressed() -> void:
 	if _current_asset_id.is_empty():

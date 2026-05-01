@@ -91,6 +91,11 @@ func bind(orch: Node) -> void:
 		am.asset_ingested.connect(_on_asset_ingested)
 	if am.has_signal("asset_deleted") and not am.asset_deleted.is_connected(_on_asset_deleted):
 		am.asset_deleted.connect(_on_asset_deleted)
+	# Phase 43 (ADR 043): refresh on metadata edits so display_name
+	# changes show up in the row labels without forcing the user to
+	# click the Refresh button.
+	if am.has_signal("asset_updated") and not am.asset_updated.is_connected(_on_asset_updated):
+		am.asset_updated.connect(_on_asset_updated)
 
 
 func refresh() -> void:
@@ -137,12 +142,20 @@ func item_count() -> int:
 func _format_row(asset: Dictionary) -> String:
 	var asset_type: String = str(asset.get("asset_type", "?"))
 	var plugin: String = str(asset.get("source_plugin", "?"))
-	var prompt: String = str(asset.get("prompt", ""))
 	var size_kb: float = float(int(asset.get("size_bytes", 0))) / 1024.0
-	var snippet: String = prompt.substr(0, 30) if not prompt.is_empty() else "(no prompt)"
-	if prompt.length() > 30:
-		snippet += "…"
-	return "[%s] %s — %s · %s" % [asset_type, plugin, snippet, _format_size(size_kb)]
+	# Phase 43 (ADR 043): display_name wins over prompt-snippet when
+	# set. Lets users author readable labels for assets they want to
+	# come back to.
+	var display_name: String = str(asset.get("display_name", ""))
+	var label: String
+	if not display_name.is_empty():
+		label = display_name
+	else:
+		var prompt: String = str(asset.get("prompt", ""))
+		label = prompt.substr(0, 30) if not prompt.is_empty() else "(no prompt)"
+		if prompt.length() > 30:
+			label += "…"
+	return "[%s] %s — %s · %s" % [asset_type, plugin, label, _format_size(size_kb)]
 
 func _format_size(size_kb: float) -> String:
 	if size_kb < 1.0:
@@ -186,6 +199,10 @@ func _format_details(asset: Dictionary) -> String:
 	return "\n".join(lines)
 
 func _on_asset_ingested(_asset_id: String, _asset: Dictionary) -> void:
+	refresh()
+
+func _on_asset_updated(_asset_id: String, _asset: Dictionary) -> void:
+	# Phase 43: same refresh strategy as ingest/delete.
 	refresh()
 
 func _on_asset_deleted(_asset_id: String) -> void:
